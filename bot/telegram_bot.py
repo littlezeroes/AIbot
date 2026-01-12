@@ -439,7 +439,7 @@ Soi từng pixel DEV vs DESIGN, tìm bug như tìm mụn trên mặt vậy đó!
         from image_diff import draw_bugs_on_image, format_bug_report, create_pixelmatch_diff
 
         pixelmatch_diff, diff_count, grouped_regions, shift_analysis = create_pixelmatch_diff(
-            dev_image, design_image, threshold=0.1
+            dev_image, design_image, threshold=0.05  # Stricter matching
         )
 
         # If no differences, report immediately
@@ -934,7 +934,7 @@ Hãy feedback design này như thể bạn đang review sản phẩm cho Apple. 
 
             from image_diff import create_pixelmatch_diff
             pixelmatch_diff, diff_count, grouped_regions, shift_analysis = create_pixelmatch_diff(
-                dev_image, temp_file_png, threshold=0.1
+                dev_image, temp_file_png, threshold=0.05  # Stricter matching
             )
 
             logging.info(f"Pixelmatch: {diff_count} different pixels, {len(grouped_regions)} regions")

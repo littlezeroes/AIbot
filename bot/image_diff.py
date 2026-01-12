@@ -864,22 +864,19 @@ def create_pixelmatch_diff(image1_bytes: io.BytesIO, image2_bytes: io.BytesIO,
         # Create output diff image
         diff_img = Image.new('RGBA', (w1, h1))
 
-        # Run pixelmatch
+        # Run pixelmatch with STRICT settings
         diff_count = pixelmatch(
             pil_img1, pil_img2, diff_img,
             threshold=threshold,
-            includeAA=False,  # Ignore anti-aliasing differences
+            includeAA=True,  # Also catch anti-aliasing differences
             alpha=0.1
         )
 
         logging.info(f"Pixelmatch found {diff_count} different pixels")
 
-        # If very few differences, consider them identical
-        total_pixels = w1 * h1
-        diff_percentage = diff_count / total_pixels * 100
-
-        if diff_count < 50 or diff_percentage < 0.01:
-            logging.info("Images are nearly identical")
+        # Only return no-diff if TRULY identical (0 pixels different)
+        if diff_count == 0:
+            logging.info("Images are truly identical")
             return None, 0, [], {}
 
         # Convert diff image to numpy for region analysis
@@ -892,9 +889,10 @@ def create_pixelmatch_diff(image1_bytes: io.BytesIO, image2_bytes: io.BytesIO,
         diff_mask = ((red_channel > 200) & (green_channel < 100)).astype(np.uint8) * 255
 
         # Group nearby differences into regions using morphological operations
-        kernel = np.ones((10, 10), np.uint8)
+        # Use smaller kernel to preserve individual differences better
+        kernel = np.ones((5, 5), np.uint8)
         diff_mask = cv2.morphologyEx(diff_mask, cv2.MORPH_CLOSE, kernel)
-        diff_mask = cv2.dilate(diff_mask, kernel, iterations=2)
+        diff_mask = cv2.dilate(diff_mask, kernel, iterations=1)  # Less dilation
 
         # Find contours (regions of difference)
         contours, _ = cv2.findContours(diff_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -905,7 +903,7 @@ def create_pixelmatch_diff(image1_bytes: io.BytesIO, image2_bytes: io.BytesIO,
 
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area > 100:  # Minimum area
+            if area > 30:  # Lower minimum to catch small differences
                 x, y, w, h = cv2.boundingRect(contour)
 
                 # Store region info
