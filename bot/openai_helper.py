@@ -114,35 +114,48 @@ CUỐI CÙNG thêm 1 câu bựa random kiểu:
 """
 
         # Special prompt for ROOT CAUSE analysis (used with pixelmatch diff)
-        self.qc_json_prompt = """Bạn là Senior QC UI. Pixelmatch đã phát hiện các VÙNG khác biệt (đánh dấu đỏ).
+        self.qc_json_prompt = """Bạn là Senior QC chuyên soi UI pixel-perfect. So sánh 2 hình: DEV (hình 1) vs DESIGN (hình 2).
 
-⚠️ NHIỆM VỤ CỦA BẠN: Phân tích NGUYÊN NHÂN GỐC, KHÔNG liệt kê từng pixel.
+🔍 SOI KỸ TỪNG CHI TIẾT:
 
-📌 QUY TẮC QUAN TRỌNG:
-1. Nếu 1 lỗi spacing/alignment gây NHIỀU vùng lệch → chỉ báo 1 lỗi GỐC
-   VD: Padding top sai → cả section dưới lệch → báo 1 lỗi "Padding top"
-2. KHÔNG báo hậu quả, chỉ báo nguyên nhân
-3. Gộp các lỗi cùng nguyên nhân thành 1
+1️⃣ SPACING - Khoảng cách:
+- Padding trên/dưới/trái/phải có đúng không?
+- Margin giữa các element có khớp không?
+- Gap trong flex/grid có đúng không?
+- Lệch 1 PIXEL cũng phải báo!
 
-🔍 PHÂN LOẠI LỖI:
+2️⃣ ALIGNMENT - Căn chỉnh:
+- Text có thẳng hàng không?
+- Icon có căn giữa đúng không?
+- Element có align đúng với nhau không?
+- Kiểm tra cả vertical và horizontal alignment
 
-1️⃣ SPACING - Khoảng cách sai:
-- Padding/margin khác design
-- Gap giữa elements không đúng
+3️⃣ COLOR - Màu sắc:
+- Background color có đúng không?
+- Text color có khớp không?
+- Border color có đúng không?
+- Opacity có đúng không?
 
-2️⃣ ALIGNMENT - Căn chỉnh sai:
-- Element lệch trái/phải/trên/dưới
-- Không thẳng hàng với design
+4️⃣ TYPOGRAPHY:
+- Font size có đúng không?
+- Font weight có khớp không?
+- Line height có đúng không?
 
-3️⃣ COLOR - Màu sắc sai:
-- Background/text/border khác màu
+5️⃣ SIZE - Kích thước:
+- Width/height element có đúng không?
+- Border radius có khớp không?
+
+📌 QUY TẮC:
+- Lệch 1 PIXEL cũng phải báo!
+- Nếu 1 lỗi gốc gây nhiều vùng lệch → chỉ báo lỗi GỐC
+- Mô tả cụ thể vị trí và cách fix
 
 TRẢ VỀ JSON:
 ```json
 [
   {
-    "bug": "Mô tả nguyên nhân GỐC cụ thể",
-    "type": "SPACING|ALIGNMENT|COLOR",
+    "bug": "Mô tả lỗi cụ thể và cách fix",
+    "type": "SPACING|ALIGNMENT|COLOR|TYPOGRAPHY|SIZE",
     "x": 0.0-1.0,
     "y": 0.0-1.0,
     "w": 0.0-1.0,
@@ -434,20 +447,15 @@ CHỈ TRẢ JSON. Không có lỗi → []
 
         yield answer, tokens_used
 
-    async def analyze_images_for_bugs(self, image1_bytes, image2_bytes, analysis_info="",
-                                       pixelmatch_diff_bytes=None, shift_analysis=None,
-                                       grouped_regions=None) -> list:
+    async def analyze_images_for_bugs(self, image1_bytes, image2_bytes, analysis_info="") -> list:
         """
-        Analyze images and return structured bug data with ROOT CAUSE analysis.
-        Uses pixelmatch diff for accurate detection, Claude for description.
+        Analyze images and return structured bug data.
+        Uses Claude Vision to compare DEV vs DESIGN images.
 
         Args:
             image1_bytes: DEV image
             image2_bytes: DESIGN image
-            analysis_info: Additional analysis info text
-            pixelmatch_diff_bytes: Diff image from pixelmatch
-            shift_analysis: Dict with cascade/shift detection info
-            grouped_regions: List of detected difference regions
+            analysis_info: Additional analysis info text (SSIM score, etc.)
 
         Returns:
             List of bugs with x, y, w, h coordinates (0.0-1.0 scale)
@@ -463,30 +471,13 @@ CHỈ TRẢ JSON. Không có lỗi → []
         # Build prompt with analysis info
         prompt = self.qc_json_prompt
 
-        # Add shift analysis info if cascade detected
-        if shift_analysis and shift_analysis.get('is_cascade'):
-            prompt += f"\n\n⚠️ PHÁT HIỆN CASCADE EFFECT:\n"
-            prompt += f"- Hướng: {shift_analysis.get('shift_direction', 'unknown')}\n"
-            prompt += f"- Ước tính lệch: ~{shift_analysis.get('estimated_shift_px', 0)}px\n"
-            prompt += f"- Số vùng bị ảnh hưởng: {shift_analysis.get('affected_regions', 0)}\n"
-            prompt += "→ CHỈ BÁO 1 LỖI GỐC (vùng đầu tiên), không báo các vùng bị ảnh hưởng!\n"
-
-        # Add region info
-        if grouped_regions:
-            prompt += f"\n\n📊 PIXELMATCH PHÁT HIỆN {len(grouped_regions)} VÙNG KHÁC BIỆT:\n"
-            for i, region in enumerate(grouped_regions[:5]):  # Max 5 regions
-                prompt += f"- Vùng #{i+1}: x={region['x']:.2f}, y={region['y']:.2f}\n"
-
         if analysis_info:
-            prompt += f"\n\n{analysis_info}"
+            prompt += f"\n\n📊 THÔNG TIN PHÂN TÍCH:\n{analysis_info}"
 
         # Add image explanations
         prompt += "\n\n🖼️ CÁC HÌNH GỬI KÈM:\n"
         prompt += "- HÌNH 1 = DEV (cần check)\n"
         prompt += "- HÌNH 2 = DESIGN (chuẩn)\n"
-
-        if pixelmatch_diff_bytes:
-            prompt += "- HÌNH 3 = PIXELMATCH DIFF: Vùng ĐỎ = khác biệt pixel chính xác\n"
 
         content = [
             {'type': 'text', 'text': prompt},
@@ -507,19 +498,6 @@ CHỈ TRẢ JSON. Không có lỗi → []
                 }
             }
         ]
-
-        # Add pixelmatch diff image
-        if pixelmatch_diff_bytes:
-            pixelmatch_diff_bytes.seek(0)
-            pixelmatch_diff_data = base64.b64encode(pixelmatch_diff_bytes.read()).decode('utf-8')
-            content.append({
-                'type': 'image',
-                'source': {
-                    'type': 'base64',
-                    'media_type': 'image/png',
-                    'data': pixelmatch_diff_data
-                }
-            })
 
         try:
             response = await self.claude_client.messages.create(
