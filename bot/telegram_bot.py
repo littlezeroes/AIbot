@@ -31,7 +31,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, \
 from pydub import AudioSegment
 from PIL import Image
 
-from image_diff import draw_bugs_on_image, format_bug_report, create_ssim_diff, create_edge_comparison
+from image_diff import draw_bugs_on_image, format_bug_report, create_ssim_diff, create_edge_comparison, create_lpips_diff
 
 from utils import is_group_chat, get_thread_id, message_text, wrap_with_indicator, split_into_chunks, \
     edit_message_with_retry, get_stream_cutoff_values, is_allowed, get_remaining_budget, is_admin, is_within_budget, \
@@ -435,20 +435,23 @@ Soi từng pixel DEV vs DESIGN, tìm bug như tìm mụn trên mặt vậy đó!
 
         logging.info(f'Re-checking images for chat {chat_id}')
 
-        # Run comparison again using SSIM + Edge detection
-        from image_diff import draw_bugs_on_image, format_bug_report, create_ssim_diff, create_edge_comparison
+        # Run comparison again using LPIPS (Deep Learning)
+        from image_diff import draw_bugs_on_image, format_bug_report, create_lpips_diff
 
-        ssim_diff, ssim_score, diff_regions = create_ssim_diff(dev_image, design_image)
+        lpips_diff, lpips_score, diff_regions, diff_details = create_lpips_diff(dev_image, design_image)
 
-        dev_image.seek(0)
-        design_image.seek(0)
-        edge_diff, alignment_info = create_edge_comparison(dev_image, design_image)
+        # If images are perceptually identical
+        if lpips_score < 0.01 or not diff_regions:
+            import random
+            comments = [
+                "✅ Check lại vẫn 0 bug! LPIPS AI xác nhận 🔥",
+                "✅ Vẫn perfect! Neural network không tìm thấy gì 💯",
+            ]
+            await update.effective_message.reply_text(random.choice(comments))
+            return
 
-        analysis_info = f"📊 SSIM Score: {ssim_score:.2%}\n"
-        if diff_regions:
-            analysis_info += f"Phát hiện {len(diff_regions)} vùng khác biệt.\n"
-        if alignment_info:
-            analysis_info += f"Alignment issues: {alignment_info.get('vertical_alignment_issues', 0)}\n"
+        analysis_info = f"📊 LPIPS Score: {lpips_score:.4f}\n"
+        analysis_info += f"Phát hiện {len(diff_regions)} vùng khác biệt.\n"
 
         dev_image.seek(0)
         design_image.seek(0)
@@ -916,34 +919,39 @@ Hãy feedback design này như thể bạn đang review sản phẩm cho Apple. 
                 'design': io.BytesIO(temp_file_png.read())
             }
 
-            await update.effective_message.reply_text("🔍 Chờ tí nha, đang soi từng pixel như soi da mụn vậy đó! 👀✨")
+            await update.effective_message.reply_text("🔍 Chờ tí nha, AI đang soi từng pixel như Applitools vậy đó! 🧠✨")
 
             logging.info(f'Comparing DEV vs DESIGN for chat {chat_id}')
 
-            # Step 1: Use SSIM for structural comparison
+            # Step 1: Use LPIPS (Deep Learning) for perceptual comparison
             dev_image.seek(0)
             temp_file_png.seek(0)
 
-            ssim_diff, ssim_score, diff_regions = create_ssim_diff(dev_image, temp_file_png)
+            lpips_diff, lpips_score, diff_regions, diff_details = create_lpips_diff(dev_image, temp_file_png)
 
-            # Step 2: Use Edge detection for alignment analysis
-            dev_image.seek(0)
-            temp_file_png.seek(0)
-            edge_diff, alignment_info = create_edge_comparison(dev_image, temp_file_png)
+            logging.info(f"LPIPS score: {lpips_score:.4f}, regions: {len(diff_regions)}")
+            logging.info(f"LPIPS details: {diff_details}")
 
-            logging.info(f"SSIM score: {ssim_score:.2%}, regions: {len(diff_regions)}")
-            logging.info(f"Alignment info: {alignment_info}")
+            # If images are perceptually identical
+            if lpips_score < 0.01 or not diff_regions:
+                import random
+                comments = [
+                    "✅ 0 bug! LPIPS AI xác nhận 2 hình giống y chang! 🔥",
+                    "✅ Perfect! Neural network không tìm thấy khác biệt! 💯",
+                    "✅ Pixel-perfect! Dev đỉnh quá! 😍",
+                ]
+                await update.effective_message.reply_text(random.choice(comments))
+                return
 
             # Build analysis info for Claude
-            analysis_info = f"📊 SSIM Score: {ssim_score:.2%}\n"
-            if diff_regions:
-                analysis_info += f"Phát hiện {len(diff_regions)} vùng khác biệt cấu trúc.\n"
-            if alignment_info:
-                analysis_info += f"Left padding diff: {alignment_info.get('left_padding_diff', 0)}px\n"
-                analysis_info += f"Right padding diff: {alignment_info.get('right_padding_diff', 0)}px\n"
-                analysis_info += f"Vertical alignment issues: {alignment_info.get('vertical_alignment_issues', 0)}\n"
+            analysis_info = f"📊 LPIPS Score: {lpips_score:.4f} (lower = more similar)\n"
+            analysis_info += f"Phát hiện {len(diff_regions)} vùng khác biệt.\n"
+            if diff_details:
+                analysis_info += f"HIGH severity: {diff_details.get('high_severity', 0)}\n"
+                analysis_info += f"MEDIUM severity: {diff_details.get('medium_severity', 0)}\n"
+                analysis_info += f"LOW severity: {diff_details.get('low_severity', 0)}\n"
 
-            # Step 3: Send to Claude for analysis
+            # Step 2: Send to Claude for detailed analysis
             dev_image.seek(0)
             temp_file_png.seek(0)
 

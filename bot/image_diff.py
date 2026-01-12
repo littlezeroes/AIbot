@@ -1100,3 +1100,200 @@ def merge_overlapping_regions(regions: list, overlap_threshold: float = 0.3) -> 
         merged.append(merged_region)
 
     return merged
+
+
+# Global LPIPS model (lazy loaded)
+_lpips_model = None
+
+def get_lpips_model():
+    """Lazy load LPIPS model to save memory."""
+    global _lpips_model
+    if _lpips_model is None:
+        import lpips
+        _lpips_model = lpips.LPIPS(net='alex')  # AlexNet is faster than VGG
+        _lpips_model.eval()
+    return _lpips_model
+
+
+def create_lpips_diff(image1_bytes: io.BytesIO, image2_bytes: io.BytesIO) -> tuple:
+    """
+    Use LPIPS (Learned Perceptual Image Patch Similarity) for AI-based comparison.
+    LPIPS uses a neural network trained on human perception to detect visual differences.
+
+    Args:
+        image1_bytes: DEV image
+        image2_bytes: DESIGN image
+
+    Returns:
+        Tuple of (diff_image_bytes, lpips_score, diff_regions, diff_details)
+        - diff_image_bytes: Visual diff highlighting perceptual differences
+        - lpips_score: 0-1 score (lower = more similar, 0 = identical)
+        - diff_regions: List of regions with high perceptual difference
+        - diff_details: Additional analysis info
+    """
+    import torch
+    import torch.nn.functional as F
+
+    try:
+        image1_bytes.seek(0)
+        image2_bytes.seek(0)
+
+        pil_img1 = Image.open(image1_bytes).convert('RGB')
+        pil_img2 = Image.open(image2_bytes).convert('RGB')
+
+        # Resize to match
+        w1, h1 = pil_img1.size
+        w2, h2 = pil_img2.size
+        if (w1, h1) != (w2, h2):
+            pil_img2 = pil_img2.resize((w1, h1), Image.Resampling.LANCZOS)
+
+        # Convert to tensors [-1, 1] range as required by LPIPS
+        def pil_to_tensor(pil_img):
+            np_img = np.array(pil_img).astype(np.float32) / 255.0
+            np_img = np_img * 2 - 1  # Scale to [-1, 1]
+            tensor = torch.from_numpy(np_img).permute(2, 0, 1).unsqueeze(0)
+            return tensor
+
+        img1_tensor = pil_to_tensor(pil_img1)
+        img2_tensor = pil_to_tensor(pil_img2)
+
+        # Get LPIPS model
+        lpips_model = get_lpips_model()
+
+        # Calculate overall LPIPS score
+        with torch.no_grad():
+            overall_score = lpips_model(img1_tensor, img2_tensor).item()
+
+        logging.info(f"LPIPS overall score: {overall_score:.4f}")
+
+        # If very similar, return early
+        if overall_score < 0.01:
+            logging.info("Images are perceptually identical")
+            return None, overall_score, [], {"status": "identical"}
+
+        # Calculate per-patch LPIPS scores to find difference regions
+        patch_size = 64
+        stride = 32
+        diff_regions = []
+        patch_scores = []
+
+        # Create diff heatmap
+        h, w = h1, w1
+        heatmap = np.zeros((h, w), dtype=np.float32)
+        count_map = np.zeros((h, w), dtype=np.float32)
+
+        with torch.no_grad():
+            for y in range(0, h - patch_size + 1, stride):
+                for x in range(0, w - patch_size + 1, stride):
+                    # Extract patches
+                    patch1 = img1_tensor[:, :, y:y+patch_size, x:x+patch_size]
+                    patch2 = img2_tensor[:, :, y:y+patch_size, x:x+patch_size]
+
+                    # Calculate LPIPS for this patch
+                    patch_score = lpips_model(patch1, patch2).item()
+                    patch_scores.append((x, y, patch_score))
+
+                    # Add to heatmap
+                    heatmap[y:y+patch_size, x:x+patch_size] += patch_score
+                    count_map[y:y+patch_size, x:x+patch_size] += 1
+
+        # Normalize heatmap
+        count_map[count_map == 0] = 1
+        heatmap = heatmap / count_map
+
+        # Threshold to find significant differences
+        # LPIPS > 0.1 is noticeable, > 0.2 is significant
+        threshold = 0.05  # Lower threshold for stricter detection
+        diff_mask = (heatmap > threshold).astype(np.uint8) * 255
+
+        # Clean up and find contours
+        kernel = np.ones((5, 5), np.uint8)
+        diff_mask = cv2.morphologyEx(diff_mask, cv2.MORPH_CLOSE, kernel)
+        diff_mask = cv2.dilate(diff_mask, kernel, iterations=1)
+
+        contours, _ = cv2.findContours(diff_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area > 100:
+                x, y, cw, ch = cv2.boundingRect(contour)
+
+                # Get average LPIPS score in this region
+                region_scores = [s for px, py, s in patch_scores
+                               if x <= px < x+cw and y <= py < y+ch]
+                avg_score = np.mean(region_scores) if region_scores else 0
+
+                diff_regions.append({
+                    'x': round(x / w, 3),
+                    'y': round(y / h, 3),
+                    'w': round(cw / w, 3),
+                    'h': round(ch / h, 3),
+                    'lpips_score': round(avg_score, 4),
+                    'severity': 'HIGH' if avg_score > 0.2 else 'MEDIUM' if avg_score > 0.1 else 'LOW'
+                })
+
+        # Sort by severity
+        diff_regions.sort(key=lambda r: r['lpips_score'], reverse=True)
+
+        # Create visual diff image
+        cv_img1 = cv2.cvtColor(np.array(pil_img1), cv2.COLOR_RGB2BGR)
+
+        # Create heatmap visualization
+        heatmap_normalized = (heatmap / max(heatmap.max(), 0.001) * 255).astype(np.uint8)
+        heatmap_colored = cv2.applyColorMap(heatmap_normalized, cv2.COLORMAP_JET)
+
+        # Blend with original
+        output = cv2.addWeighted(cv_img1, 0.6, heatmap_colored, 0.4, 0)
+
+        # Draw bounding boxes
+        for i, region in enumerate(diff_regions[:10]):  # Max 10 regions
+            x = int(region['x'] * w)
+            y = int(region['y'] * h)
+            rw = int(region['w'] * w)
+            rh = int(region['h'] * h)
+
+            # Color based on severity
+            if region['severity'] == 'HIGH':
+                color = (0, 0, 255)  # Red
+            elif region['severity'] == 'MEDIUM':
+                color = (0, 165, 255)  # Orange
+            else:
+                color = (0, 255, 255)  # Yellow
+
+            cv2.rectangle(output, (x, y), (x + rw, y + rh), color, 2)
+            cv2.putText(output, f"#{i+1} {region['severity']}", (x, y - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        # Add legend
+        cv2.putText(output, f"LPIPS Score: {overall_score:.4f}", (10, 30),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
+        cv2.putText(output, f"Regions: {len(diff_regions)}", (10, 60),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(output, "RED=High | ORANGE=Medium | YELLOW=Low", (10, 90),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+
+        # Convert to PIL and save
+        rgb_output = cv2.cvtColor(output, cv2.COLOR_BGR2RGB)
+        pil_output = Image.fromarray(rgb_output)
+
+        output_bytes = io.BytesIO()
+        pil_output.save(output_bytes, format='PNG')
+        output_bytes.seek(0)
+
+        diff_details = {
+            "overall_score": overall_score,
+            "num_regions": len(diff_regions),
+            "high_severity": len([r for r in diff_regions if r['severity'] == 'HIGH']),
+            "medium_severity": len([r for r in diff_regions if r['severity'] == 'MEDIUM']),
+            "low_severity": len([r for r in diff_regions if r['severity'] == 'LOW']),
+        }
+
+        logging.info(f"LPIPS analysis: {diff_details}")
+
+        return output_bytes, overall_score, diff_regions, diff_details
+
+    except Exception as e:
+        logging.error(f"Error in LPIPS diff: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, 0, [], {"error": str(e)}
