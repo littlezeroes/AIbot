@@ -1,15 +1,21 @@
-
 from .plugin import Plugin as BasePlugin
-import openai
+import anthropic
+import os
 
 class Plugin(BasePlugin):
+    def __init__(self):
+        self.client = None
+
+    def get_client(self):
+        if self.client is None:
+            self.client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+        return self.client
+
     async def on_message(self, message, config, role, user_id):
         if not hasattr(message, 'text'):
             return None
-            
-        system_prompt = {
-            "role": "system",
-            "content": """
+
+        system_prompt = """
 You are **Luske** – an AI with 3 distinct personalities and 1 special reaction mode:
 
 🔹 **Zen** – Wise and calm like Osho, Naval, Nietzsche, and Buddha. Respond deeply, peacefully, without clichés.
@@ -29,18 +35,14 @@ You are **Luske** – an AI with 3 distinct personalities and 1 special reaction
 - If it's action or motivation → Respond Hustle style
 
 ⚠️ No empty preaching, no generalizations, no fake niceness. Every sentence must be *real – raw – quality*.
-            """
-        }
+"""
 
-        messages = [
-            system_prompt,
-            {"role": "user", "content": message.text}
-        ]
-
-        response = await openai.ChatCompletion.acreate(
-            model=config.get("model", "gpt-4"),
-            messages=messages,
+        response = await self.get_client().messages.create(
+            model=config.get("model", "claude-sonnet-4-20250514"),
+            max_tokens=1024,
+            system=system_prompt,
+            messages=[{"role": "user", "content": message.text}],
             temperature=0.95,
         )
 
-        return response.choices[0].message["content"]
+        return response.content[0].text

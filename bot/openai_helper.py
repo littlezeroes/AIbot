@@ -5,7 +5,6 @@ import os
 import base64
 
 import anthropic
-import openai
 import httpx
 
 import json
@@ -84,13 +83,6 @@ class OpenAIHelper:
         """
         # Claude client for chat and vision
         self.claude_client = anthropic.AsyncAnthropic(api_key=config['anthropic_api_key'])
-
-        # Keep OpenAI client for image generation, TTS, transcription
-        if config.get('openai_api_key'):
-            http_client = httpx.AsyncClient(proxy=config['proxy']) if config.get('proxy') else None
-            self.openai_client = openai.AsyncOpenAI(api_key=config['openai_api_key'], http_client=http_client)
-        else:
-            self.openai_client = None
 
         self.config = config
         self.plugin_manager = plugin_manager
@@ -291,78 +283,21 @@ CHỈ TRẢ JSON. Không có bug → []
 
     async def generate_image(self, prompt: str) -> tuple[str, str]:
         """
-        Generates an image from the given prompt using DALL·E model.
-        Requires OpenAI API key.
+        Image generation disabled - OpenAI removed.
         """
-        if not self.openai_client:
-            raise Exception("Image generation requires OpenAI API key (OPENAI_API_KEY)")
-
-        bot_language = self.config['bot_language']
-        try:
-            response = await self.openai_client.images.generate(
-                prompt=prompt,
-                n=1,
-                model=self.config['image_model'],
-                quality=self.config['image_quality'],
-                style=self.config['image_style'],
-                size=self.config['image_size']
-            )
-
-            if len(response.data) == 0:
-                logging.error(f'No response from DALL-E: {str(response)}')
-                raise Exception(
-                    f"⚠️ _{localized_text('error', bot_language)}._ "
-                    f"⚠️\n{localized_text('try_again', bot_language)}."
-                )
-
-            return response.data[0].url, self.config['image_size']
-        except Exception as e:
-            raise Exception(f"⚠️ _{localized_text('error', bot_language)}._ ⚠️\n{str(e)}") from e
+        raise Exception("Image generation is disabled (OpenAI removed)")
 
     async def generate_speech(self, text: str) -> tuple[any, int]:
         """
-        Generates audio from text using TTS model.
-        Requires OpenAI API key.
+        TTS disabled - OpenAI removed.
         """
-        if not self.openai_client:
-            raise Exception("TTS generation requires OpenAI API key (OPENAI_API_KEY)")
-
-        bot_language = self.config['bot_language']
-        try:
-            response = await self.openai_client.audio.speech.create(
-                model=self.config['tts_model'],
-                voice=self.config['tts_voice'],
-                input=text,
-                response_format='opus'
-            )
-
-            temp_file = io.BytesIO()
-            temp_file.write(response.read())
-            temp_file.seek(0)
-            return temp_file, len(text)
-        except Exception as e:
-            raise Exception(f"⚠️ _{localized_text('error', bot_language)}._ ⚠️\n{str(e)}") from e
+        raise Exception("TTS is disabled (OpenAI removed)")
 
     async def transcribe(self, filename):
         """
-        Transcribes audio file using Whisper model.
-        Requires OpenAI API key.
+        Transcription disabled - OpenAI removed.
         """
-        if not self.openai_client:
-            raise Exception("Transcription requires OpenAI API key (OPENAI_API_KEY)")
-
-        try:
-            with open(filename, "rb") as audio:
-                prompt_text = self.config['whisper_prompt']
-                result = await self.openai_client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio,
-                    prompt=prompt_text
-                )
-                return result.text
-        except Exception as e:
-            logging.exception(e)
-            raise Exception(f"⚠️ _{localized_text('error', self.config['bot_language'])}._ ⚠️\n{str(e)}") from e
+        raise Exception("Transcription is disabled (OpenAI removed)")
 
     @retry(
         reraise=True,

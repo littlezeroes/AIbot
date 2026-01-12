@@ -32,7 +32,6 @@ def main():
     max_tokens_default = default_max_tokens(model=model)
     openai_config = {
         'anthropic_api_key': os.environ['ANTHROPIC_API_KEY'],
-        'openai_api_key': os.environ.get('OPENAI_API_KEY'),  # Optional, for DALL-E/TTS/Whisper
         'show_usage': os.environ.get('SHOW_USAGE', 'false').lower() == 'true',
         'stream': os.environ.get('STREAM', 'true').lower() == 'true',
         'proxy': os.environ.get('PROXY', None) or os.environ.get('OPENAI_PROXY', None),
