@@ -394,6 +394,9 @@ Soi từng pixel DEV vs DESIGN, tìm bug như tìm mụn trên mặt vậy đó!
         """
         chat_id = update.effective_chat.id
 
+        # Clear feedback mode if active
+        self.pending_feedback.discard(chat_id)
+
         # Initialize comparison state
         self.pending_compare[chat_id] = {
             'state': 'waiting_dev',
@@ -481,6 +484,11 @@ Soi từng pixel DEV vs DESIGN, tìm bug như tìm mụn trên mặt vậy đó!
         Start feedback mode - critique design like Steve Jobs.
         """
         chat_id = update.effective_chat.id
+
+        # Clear check mode if active
+        if chat_id in self.pending_compare:
+            del self.pending_compare[chat_id]
+
         self.pending_feedback.add(chat_id)
 
         await update.effective_message.reply_text(
