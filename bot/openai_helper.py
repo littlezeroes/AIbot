@@ -132,9 +132,12 @@ HÌNH 2 = DESIGN (chuẩn)
 - Gap giữa các element khác design
 - Khoảng cách dù chỉ vài pixel cũng phải báo
 
-2️⃣ ALIGNMENT - Lệch RÕ RÀNG:
-- Element bị lệch trái/phải/trên/dưới so với design
-- Không thẳng hàng với các element khác
+2️⃣ ALIGNMENT - Căn chỉnh (CỰC KỲ NGHIÊM NGẶT):
+- Lệch 1 PIXEL cũng phải báo!
+- Kẻ đường thẳng ảo từ trên xuống dưới để check vertical alignment
+- Cạnh trái/phải của các element có thẳng hàng pixel-perfect không?
+- Text/button/icon có căn giữa chính xác không?
+- Element lệch trái/phải/trên/dưới dù chỉ 1px cũng báo lỗi
 
 3️⃣ COLOR - Màu sắc KHÁC RÕ:
 - Màu background/text/border khác hẳn design
