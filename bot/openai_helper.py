@@ -114,44 +114,48 @@ CUỐI CÙNG thêm 1 câu bựa random kiểu:
 """
 
         # Special prompt for getting structured bug data with coordinates
-        self.qc_json_prompt = """Bạn là QC UI chuyên nghiệp. So sánh 2 hình một cách CHÍNH XÁC.
-
-⚠️ QUAN TRỌNG - NGUYÊN TẮC BÁO LỖI:
-1. CHỈ báo lỗi khi bạn CHẮC CHẮN 100% có sự khác biệt RÕ RÀNG giữa DEV và DESIGN
-2. KHÔNG đoán mò - nếu không chắc thì KHÔNG báo
-3. So sánh TỪNG element một cách cẩn thận
-4. Nếu 2 hình gần giống nhau, trả về [] (mảng rỗng)
+        self.qc_json_prompt = """Bạn là Senior QC UI cực kỳ khắt khe, soi từng pixel.
 
 HÌNH 1 = DEV (cần check)
 HÌNH 2 = DESIGN (chuẩn)
 
-🔍 CHỈ CHECK 3 LOẠI LỖI RÕ RÀNG:
+🔍 CHECK KỸ 3 LOẠI LỖI:
 
 1️⃣ SPACING - Khoảng cách:
-- Padding/margin chênh lệch so với design
-- Gap giữa các element khác design
-- Khoảng cách dù chỉ vài pixel cũng phải báo
+- ⭐ PADDING TRÁI/PHẢI của container, card, section - SO SÁNH CHÍNH XÁC với design!
+- ⭐ Padding trong button/card/input - đo pixel chênh lệch!
+- Margin giữa các element không đều?
+- Gap giữa items khác design?
+- Khoảng cách text-icon, text-border?
 
-2️⃣ ALIGNMENT - Căn chỉnh (CỰC KỲ NGHIÊM NGẶT):
-- Lệch 1 PIXEL cũng phải báo!
-- Kẻ đường thẳng ảo từ trên xuống dưới để check vertical alignment
-- Cạnh trái/phải của các element có thẳng hàng pixel-perfect không?
-- Text/button/icon có căn giữa chính xác không?
-- Element lệch trái/phải/trên/dưới dù chỉ 1px cũng báo lỗi
+2️⃣ ALIGNMENT - Căn chỉnh (PIXEL-PERFECT):
+- ⭐⭐ VERTICAL ALIGNMENT (Thẳng hàng DỌC) - RẤT QUAN TRỌNG:
+  + Kẻ đường dọc ảo từ trên xuống dưới - các element có thẳng hàng không?
+  + Cạnh TRÁI của các element có thẳng hàng với nhau không?
+  + Cạnh PHẢI của các element có thẳng hàng với nhau không?
+  + Text/button/card có bị lệch sang trái/phải so với design không?
+  + Lệch 1 PIXEL cũng phải báo!
+- Horizontal alignment (thẳng hàng ngang):
+  + Elements cùng hàng có cùng độ cao không?
+- Text không căn giữa/trái/phải đúng?
+- Icon không căn giữa với text?
 
-3️⃣ COLOR - Màu sắc KHÁC RÕ:
-- Màu background/text/border khác hẳn design
+3️⃣ COLOR - Màu sắc:
+- Màu background khác design?
+- Màu text khác design?
+- Màu border/stroke khác design?
+- Màu button/icon khác design?
 
-⛔ KHÔNG BÁO LỖI NẾU:
-- Không chắc chắn có khác biệt
-- Do chất lượng hình ảnh khác nhau
-- Do font rendering khác nhau (anti-aliasing)
+⚠️ KỸ THUẬT SOI:
+- Với mỗi row/section: Kẻ đường dọc ảo ở cạnh trái và cạnh phải → check alignment
+- So sánh padding-left và padding-right của DEV vs DESIGN
+- Chú ý các element bị "lệch" dù chỉ vài pixel
 
-TRẢ VỀ JSON (CHỈ JSON, không text khác):
+TRẢ VỀ JSON - MỖI LỖI 1 OBJECT:
 ```json
 [
   {
-    "bug": "Mô tả ngắn gọn lỗi cụ thể và rõ ràng",
+    "bug": "Mô tả ngắn gọn lỗi cụ thể",
     "type": "SPACING|ALIGNMENT|COLOR",
     "x": 0.0-1.0,
     "y": 0.0-1.0,
@@ -161,10 +165,10 @@ TRẢ VỀ JSON (CHỈ JSON, không text khác):
 ]
 ```
 
-x,y = góc trên trái của vùng lỗi (0=trái/trên, 1=phải/dưới)
+x,y = góc trên trái (0=trái/trên, 1=phải/dưới)
 w,h = kích thước vùng lỗi
 
-KHÔNG CÓ LỖI RÕ RÀNG → trả về []
+CHỈ TRẢ JSON. Không có bug → []
 """
 
     def get_conversation_stats(self, chat_id: int) -> tuple[int, int]:
