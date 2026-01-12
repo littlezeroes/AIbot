@@ -114,47 +114,41 @@ CUỐI CÙNG thêm 1 câu bựa random kiểu:
 """
 
         # Special prompt for getting structured bug data with coordinates
-        self.qc_json_prompt = """Bạn là Senior QC UI cực kỳ khắt khe, soi từng pixel.
+        self.qc_json_prompt = """Bạn là QC UI chuyên nghiệp. So sánh 2 hình một cách CHÍNH XÁC.
+
+⚠️ QUAN TRỌNG - NGUYÊN TẮC BÁO LỖI:
+1. CHỈ báo lỗi khi bạn CHẮC CHẮN 100% có sự khác biệt RÕ RÀNG giữa DEV và DESIGN
+2. KHÔNG đoán mò - nếu không chắc thì KHÔNG báo
+3. So sánh TỪNG element một cách cẩn thận
+4. Nếu 2 hình gần giống nhau, trả về [] (mảng rỗng)
 
 HÌNH 1 = DEV (cần check)
 HÌNH 2 = DESIGN (chuẩn)
 
-🔍 CHECK KỸ 3 LOẠI LỖI:
+🔍 CHỈ CHECK 3 LOẠI LỖI RÕ RÀNG:
 
-1️⃣ SPACING - Khoảng cách:
-- ⭐ PADDING TRÁI/PHẢI của container, card, section - SO SÁNH CHÍNH XÁC với design!
-- ⭐ Padding trong button/card/input - đo pixel chênh lệch!
-- Margin giữa các element không đều?
-- Gap giữa items khác design?
-- Khoảng cách text-icon, text-border?
+1️⃣ SPACING - Khoảng cách KHÁC BIỆT RÕ:
+- Padding/margin chênh lệch đáng kể (>5px)
+- Gap giữa các element khác rõ ràng
 
-2️⃣ ALIGNMENT - Căn chỉnh:
-- ⭐⭐ VERTICAL ALIGNMENT (Thẳng hàng DỌC) - RẤT QUAN TRỌNG:
-  + Kẻ đường dọc ảo từ trên xuống dưới - các element có thẳng hàng không?
-  + Cạnh TRÁI của các element có thẳng hàng với nhau không?
-  + Cạnh PHẢI của các element có thẳng hàng với nhau không?
-  + Text/button/card có bị lệch sang trái/phải so với design không?
-- Horizontal alignment (thẳng hàng ngang):
-  + Elements cùng hàng có cùng độ cao không?
-- Text không căn giữa/trái/phải đúng?
-- Icon không căn giữa với text?
+2️⃣ ALIGNMENT - Lệch RÕ RÀNG:
+- Element bị lệch trái/phải/trên/dưới so với design
+- Không thẳng hàng với các element khác
 
-3️⃣ COLOR - Màu sắc:
-- Màu background khác design?
-- Màu text khác design?
-- Màu border/stroke khác design?
-- Màu button/icon khác design?
+3️⃣ COLOR - Màu sắc KHÁC RÕ:
+- Màu background/text/border khác hẳn design
 
-⚠️ KỸ THUẬT SOI:
-- Với mỗi row/section: Kẻ đường dọc ảo ở cạnh trái và cạnh phải → check alignment
-- So sánh padding-left và padding-right của DEV vs DESIGN
-- Chú ý các element bị "lệch" dù chỉ vài pixel
+⛔ KHÔNG BÁO LỖI NẾU:
+- Chỉ khác một chút không đáng kể
+- Không chắc chắn có khác biệt
+- Do chất lượng hình ảnh
+- Do font rendering khác nhau
 
-TRẢ VỀ JSON - MỖI LỖI 1 OBJECT:
+TRẢ VỀ JSON (CHỈ JSON, không text khác):
 ```json
 [
   {
-    "bug": "Mô tả ngắn gọn lỗi cụ thể",
+    "bug": "Mô tả ngắn gọn lỗi cụ thể và rõ ràng",
     "type": "SPACING|ALIGNMENT|COLOR",
     "x": 0.0-1.0,
     "y": 0.0-1.0,
@@ -164,10 +158,10 @@ TRẢ VỀ JSON - MỖI LỖI 1 OBJECT:
 ]
 ```
 
-x,y = góc trên trái (0=trái/trên, 1=phải/dưới)
+x,y = góc trên trái của vùng lỗi (0=trái/trên, 1=phải/dưới)
 w,h = kích thước vùng lỗi
 
-CHỈ TRẢ JSON. Không có bug → []
+KHÔNG CÓ LỖI RÕ RÀNG → trả về []
 """
 
     def get_conversation_stats(self, chat_id: int) -> tuple[int, int]:
@@ -536,7 +530,7 @@ CHỈ TRẢ JSON. Không có bug → []
                 model=self.config['vision_model'],
                 max_tokens=2000,
                 messages=[{'role': 'user', 'content': content}],
-                temperature=0.1,
+                temperature=0,  # 0 for consistent, accurate results
             )
 
             result_text = response.content[0].text.strip()
