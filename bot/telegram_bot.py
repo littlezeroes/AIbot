@@ -164,6 +164,7 @@ class ChatGPTTelegramBot:
         self.last_message = {}
         self.inline_queries_cache = {}
         self.pending_compare = {}  # Store comparison state: {chat_id: {'state': 'waiting_dev'|'waiting_design', 'dev_image': ...}}
+        self.last_compare = {}  # Store last compared images for re-check: {chat_id: {'dev': bytes, 'design': bytes}}
 
     async def summarize_and_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
@@ -406,6 +407,72 @@ Soi từng pixel DEV vs DESIGN, tìm bug như tìm mụn trên mặt vậy đó!
             parse_mode='Markdown'
         )
         logging.info(f'Started check flow for chat {chat_id}')
+
+    async def recheck(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Re-check the last compared images when user asks to check again.
+        """
+        chat_id = update.effective_chat.id
+
+        if chat_id not in self.last_compare:
+            await update.effective_message.reply_text(
+                "🤔 Chưa có hình nào để check lại!\n\n"
+                "📋 Gửi /check → DEV → DESIGN để bắt đầu nha!"
+            )
+            return
+
+        await update.effective_message.reply_text("🔄 OK check lại nha! Chờ tí...")
+
+        dev_image = self.last_compare[chat_id]['dev']
+        design_image = self.last_compare[chat_id]['design']
+        dev_image.seek(0)
+        design_image.seek(0)
+
+        logging.info(f'Re-checking images for chat {chat_id}')
+
+        # Run comparison again
+        from image_diff import draw_bugs_on_image, format_bug_report, create_ssim_diff, create_edge_comparison
+
+        ssim_diff, ssim_score, diff_regions = create_ssim_diff(dev_image, design_image)
+        dev_image.seek(0)
+        design_image.seek(0)
+        edge_diff, alignment_info = create_edge_comparison(dev_image, design_image)
+
+        analysis_info = ""
+        if ssim_diff:
+            analysis_info = f"📊 SSIM Score: {ssim_score:.2%}\n"
+            analysis_info += f"Phát hiện {len(diff_regions)} vùng khác biệt.\n"
+        if alignment_info:
+            analysis_info += f"\n📐 EDGE ANALYSIS:\n"
+            analysis_info += f"- Left padding diff: {alignment_info.get('left_padding_diff', 0)}px\n"
+            analysis_info += f"- Right padding diff: {alignment_info.get('right_padding_diff', 0)}px\n"
+
+        dev_image.seek(0)
+        design_image.seek(0)
+
+        try:
+            bugs = await self.openai.analyze_images_for_bugs(
+                dev_image, design_image, analysis_info, ssim_diff, edge_diff
+            )
+
+            if bugs:
+                dev_image.seek(0)
+                annotated_image = draw_bugs_on_image(dev_image, bugs)
+                if annotated_image:
+                    bug_report = format_bug_report(bugs)
+                    await update.effective_message.reply_photo(photo=annotated_image, caption=bug_report)
+                else:
+                    await update.effective_message.reply_text(format_bug_report(bugs))
+            else:
+                import random
+                comments = [
+                    "✅ Check lại vẫn 0 bug! Dev ngon thiệt 🔥",
+                    "✅ Vẫn perfect! Không có gì mới đâu 💯",
+                ]
+                await update.effective_message.reply_text(random.choice(comments))
+        except Exception as e:
+            logging.error(f"Error in recheck: {e}")
+            await update.effective_message.reply_text(f"❌ Lỗi khi check lại: {e}")
 
     async def reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
@@ -722,6 +789,14 @@ Soi từng pixel DEV vs DESIGN, tìm bug như tìm mụn trên mặt vậy đó!
 
             # Clear state
             del self.pending_compare[chat_id]
+
+            # Save images for re-check
+            dev_image.seek(0)
+            temp_file_png.seek(0)
+            self.last_compare[chat_id] = {
+                'dev': io.BytesIO(dev_image.read()),
+                'design': io.BytesIO(temp_file_png.read())
+            }
 
             await update.effective_message.reply_text("🔍 Chờ tí nha, đang soi từng pixel như soi da mụn vậy đó! 👀✨")
 
@@ -1081,6 +1156,13 @@ Soi từng pixel DEV vs DESIGN, tìm bug như tìm mụn trên mặt vậy đó!
 
         if await self.summarize_and_reply(update, context):
             return  # đã xử lý tóm tắt thì không chạy tiếp
+
+        # Check for re-check request
+        recheck_keywords = ["check lại", "kiểm tra lại", "soi lại", "check lai", "kiem tra lai", "soi lai", "recheck"]
+        if any(keyword in text for keyword in recheck_keywords):
+            await self.recheck(update, context)
+            return
+
         if is_group_chat(update):
             bot_username = context.bot.username.lower()
             message_text_lower = prompt.lower()
