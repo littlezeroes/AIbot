@@ -882,11 +882,18 @@ def create_pixelmatch_diff(image1_bytes: io.BytesIO, image2_bytes: io.BytesIO,
         # Convert diff image to numpy for region analysis
         diff_array = np.array(diff_img)
 
-        # Create binary mask of differences (red pixels in diff)
-        # Pixelmatch outputs red for differences
+        # Create binary mask of differences
+        # Pixelmatch outputs pinkish color (255, 119, 119) for differences
+        # Check for any non-black pixel (any color channel > 50)
         red_channel = diff_array[:, :, 0]
         green_channel = diff_array[:, :, 1]
-        diff_mask = ((red_channel > 200) & (green_channel < 100)).astype(np.uint8) * 255
+        blue_channel = diff_array[:, :, 2]
+        alpha_channel = diff_array[:, :, 3] if diff_array.shape[2] == 4 else np.ones_like(red_channel) * 255
+
+        # Any pixel that has color (not transparent/black) is a difference
+        diff_mask = ((red_channel > 50) | (green_channel > 50) | (blue_channel > 50)).astype(np.uint8) * 255
+
+        logging.info(f"Diff mask has {np.sum(diff_mask > 0)} non-zero pixels")
 
         # Group nearby differences into regions using morphological operations
         # Use smaller kernel to preserve individual differences better
