@@ -31,7 +31,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, \
 from pydub import AudioSegment
 from PIL import Image
 
-from image_diff import create_diff_image, create_side_by_side_diff
+from image_diff import draw_bugs_on_image, format_bug_report, create_ssim_diff, create_edge_comparison
 
 from utils import is_group_chat, get_thread_id, message_text, wrap_with_indicator, split_into_chunks, \
     edit_message_with_retry, get_stream_cutoff_values, is_allowed, get_remaining_budget, is_admin, is_within_budget, \
@@ -61,7 +61,7 @@ async def extract_city_from_text(text: str) -> str:
     )
     try:
         response = await get_claude_client().messages.create(
-            model="claude-3-5-haiku-20241022",
+            model="claude-sonnet-4-20250514",
             max_tokens=10,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
@@ -216,10 +216,40 @@ class ChatGPTTelegramBot:
                 """
                 Shows the help menu.
                 """
-                commands = self.group_commands if is_group_chat(update) else self.commands
-                commands_description = [f'/{command.command} - {command.description}' for command in commands]
-                bot_language = self.config['bot_language']
-                await update.message.reply_text(help_text, disable_web_page_preview=True)
+                help_text = """🤖 **CHÀO MỪNG ĐẾN VỚI SOI BUG BOT!**
+
+Tao là bot soi bug UI của anh @kieumanhhuy đẹp trai tạo ra 😎
+
+━━━━━━━━━━━━━━━━━━━━━━
+🎯 **TAO LÀM GÌ?**
+Soi từng pixel DEV vs DESIGN, tìm bug như tìm mụn trên mặt vậy đó! 👀
+
+━━━━━━━━━━━━━━━━━━━━━━
+📋 **CÁCH DÙNG:**
+
+1️⃣ Gửi `/check` để bắt đầu
+2️⃣ Quăng hình **DEV** (hình cần check)
+3️⃣ Quăng hình **DESIGN** (hình chuẩn)
+4️⃣ Chờ tao soi và báo bug 🔍
+
+━━━━━━━━━━━━━━━━━━━━━━
+🔧 **LỆNH:**
+/check - Bắt đầu soi bug
+/reset - Huỷ bỏ, làm lại
+
+━━━━━━━━━━━━━━━━━━━━━━
+🎨 **TAO SOI GÌ?**
+• SPACING - Khoảng cách, padding
+• ALIGNMENT - Căn chỉnh, thẳng hàng
+• COLOR - Màu sắc
+
+━━━━━━━━━━━━━━━━━━━━━━
+💡 Có bug gì thì hỏi ông chủ @kieumanhhuy nha!
+💼 Có job design thì liên hệ ông @kieumanhhuy đi, ổng đang đói lắm 😭🍚
+
+**LET'S GO SOI BUG! 🚀**
+"""
+                await update.message.reply_text(help_text, parse_mode='Markdown', disable_web_page_preview=True)
 
     async def stats(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
@@ -369,9 +399,10 @@ class ChatGPTTelegramBot:
         }
 
         await update.effective_message.reply_text(
-            "🔍 **BẮT ĐẦU CHECK BUG**\n\n"
-            "📤 Gửi hình **DEV** (hình cần check) trước nha!\n\n"
-            "💡 Gửi /reset để huỷ",
+            "🔍 **SOI BUG MODE ON!**\n\n"
+            "📤 Quăng hình **DEV** (hình cần soi) vô đây đi!\n\n"
+            "💡 Gửi /reset nếu đổi ý\n"
+            "🤖 Bot by @kieumanhhuy",
             parse_mode='Markdown'
         )
         logging.info(f'Started check flow for chat {chat_id}')
@@ -663,8 +694,9 @@ class ChatGPTTelegramBot:
         if chat_id not in self.pending_compare:
             # No active flow - ask user to start with /check
             await update.effective_message.reply_text(
-                "🤔 Ê, gửi /check trước để bắt đầu check bug nha!\n\n"
-                "📋 Flow: /check → Gửi hình DEV → Gửi hình DESIGN → Xem bug"
+                "🤔 Ê ê, gửi /check trước đi rồi hẵng quăng hình!\n\n"
+                "📋 Flow: /check → Quăng DEV → Quăng DESIGN → Tao soi\n"
+                "🤖 Bot by @kieumanhhuy"
             )
             return
 
@@ -676,9 +708,9 @@ class ChatGPTTelegramBot:
             self.pending_compare[chat_id]['state'] = 'waiting_design'
 
             await update.effective_message.reply_text(
-                "✅ **Đã nhận hình DEV!**\n\n"
-                "📤 Giờ gửi hình **DESIGN** (hình chuẩn) đi!\n\n"
-                "💡 Gửi /reset để huỷ",
+                "✅ **OK nhận hình DEV rồi!**\n\n"
+                "📤 Giờ quăng hình **DESIGN** (hình chuẩn) vô để tao soi nha!\n\n"
+                "💡 /reset nếu đổi ý",
                 parse_mode='Markdown'
             )
             logging.info(f'Received DEV image for chat {chat_id}')
@@ -691,37 +723,82 @@ class ChatGPTTelegramBot:
             # Clear state
             del self.pending_compare[chat_id]
 
-            await update.effective_message.reply_text("🔍 Đang so sánh 2 hình...")
-
-            # Generate visual diff image to pinpoint differences
-            try:
-                diff_image, diff_count = create_diff_image(dev_image, temp_file_png)
-                if diff_image and diff_count > 0:
-                    await update.effective_message.reply_photo(
-                        photo=diff_image,
-                        caption=f"📍 **Phát hiện {diff_count} vùng khác biệt!**\n\n"
-                                f"Các ô đỏ đánh dấu vị trí khác biệt giữa DEV và DESIGN.",
-                        parse_mode='Markdown'
-                    )
-                elif diff_image and diff_count == 0:
-                    await update.effective_message.reply_text(
-                        "✅ Không phát hiện khác biệt pixel rõ ràng!\n"
-                        "GPT-4o sẽ kiểm tra chi tiết hơn..."
-                    )
-            except Exception as e:
-                logging.warning(f"Could not generate diff image: {e}")
-                # Continue with GPT-4o analysis even if diff fails
-
-            final_prompt = prompt or "Hình 1 là DEV (cần check), Hình 2 là DESIGN (chuẩn). So sánh và tìm tất cả điểm khác biệt."
+            await update.effective_message.reply_text("🔍 Chờ tí nha, đang soi từng pixel như soi da mụn vậy đó! 👀✨")
 
             logging.info(f'Comparing DEV vs DESIGN for chat {chat_id}')
 
-            # Reset image positions for GPT-4o
+            # Step 1: Create SSIM diff image
+            dev_image.seek(0)
+            temp_file_png.seek(0)
+            ssim_diff, ssim_score, diff_regions = create_ssim_diff(dev_image, temp_file_png)
+
+            # Step 2: Create Edge comparison for alignment detection
+            dev_image.seek(0)
+            temp_file_png.seek(0)
+            edge_diff, alignment_info = create_edge_comparison(dev_image, temp_file_png)
+
+            # Build analysis info for Claude
+            analysis_info = ""
+            if ssim_diff:
+                analysis_info = f"📊 SSIM Score: {ssim_score:.2%} (100% = giống hệt)\n"
+                analysis_info += f"Phát hiện {len(diff_regions)} vùng khác biệt cấu trúc.\n"
+                logging.info(f"SSIM score: {ssim_score:.2%}, regions: {len(diff_regions)}")
+
+            if alignment_info:
+                analysis_info += f"\n📐 EDGE ANALYSIS (Alignment & Padding):\n"
+                analysis_info += f"- Left padding diff: {alignment_info.get('left_padding_diff', 0)}px\n"
+                analysis_info += f"- Right padding diff: {alignment_info.get('right_padding_diff', 0)}px\n"
+                analysis_info += f"- Vertical alignment issues: {alignment_info.get('vertical_alignment_issues', 0)}\n"
+                analysis_info += f"- Total edge diff: {alignment_info.get('total_edge_diff', 0)}px\n"
+                logging.info(f"Edge analysis: {alignment_info}")
+
+            # Step 3: Send DEV + DESIGN + SSIM diff + Edge diff to Claude
             dev_image.seek(0)
             temp_file_png.seek(0)
 
-            # Process both images with GPT-4o
-            await self._process_vision(update, context, chat_id, [dev_image, temp_file_png], final_prompt)
+            try:
+                bugs = await self.openai.analyze_images_for_bugs(
+                    dev_image,
+                    temp_file_png,
+                    analysis_info,
+                    ssim_diff,  # Pass SSIM diff image to Claude
+                    edge_diff   # Pass Edge comparison image to Claude
+                )
+                logging.info(f'Claude found {len(bugs)} bugs')
+
+                if bugs:
+                    # Step 3: Draw boxes on DEV image based on Claude's coordinates
+                    dev_image.seek(0)
+                    annotated_image = draw_bugs_on_image(dev_image, bugs)
+
+                    if annotated_image:
+                        # Step 4: Send annotated image with bug report
+                        bug_report = format_bug_report(bugs)
+                        await update.effective_message.reply_photo(
+                            photo=annotated_image,
+                            caption=bug_report
+                        )
+                    else:
+                        # Fallback to text only
+                        await update.effective_message.reply_text(format_bug_report(bugs))
+                else:
+                    import random
+                    comments = [
+                        "✅ 0 bug! Dev hôm nay uống thuốc gì ngon vậy? 🔥",
+                        "✅ Perfect! Cho dev tăng lương đi sếp ơi! 💰",
+                        "✅ Ủa khớp pixel-perfect luôn? Dev đỉnh quá! 😍",
+                        "✅ Clean! Hôm nay dev không ngủ gật hen 👏",
+                    ]
+                    await update.effective_message.reply_text(random.choice(comments))
+
+            except Exception as e:
+                logging.error(f"Error in smart comparison: {e}")
+                # Fallback to regular Claude analysis
+                dev_image.seek(0)
+                temp_file_png.seek(0)
+                final_prompt = "Hình 1 là DEV. Hình 2 là DESIGN chuẩn. So sánh và báo lỗi."
+                await self._process_vision(update, context, chat_id, [dev_image, temp_file_png], final_prompt)
+
             return
 
         # Fallback - shouldn't reach here

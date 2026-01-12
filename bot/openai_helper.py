@@ -19,11 +19,10 @@ from plugin_manager import PluginManager
 
 # Claude models
 CLAUDE_MODELS = (
-    "claude-3-5-sonnet-20241022",
-    "claude-3-5-haiku-20241022",
-    "claude-3-opus-20240229",
-    "claude-3-sonnet-20240229",
-    "claude-3-haiku-20240307",
+    "claude-sonnet-4-20250514",
+    "claude-3-5-sonnet-latest",
+    "claude-3-5-haiku-latest",
+    "claude-3-opus-latest",
 )
 
 # Keep OpenAI models for reference (used for image gen, TTS, whisper)
@@ -100,31 +99,83 @@ class OpenAIHelper:
         self.last_updated: dict[int: datetime] = {}  # {chat_id: last_update_timestamp}
 
         # System prompt for QC
-        self.system_prompt = """Bạn là QC soi pixel-perfect UI. Trả lời tiếng Việt.
+        self.system_prompt = """Bạn là QC Bot bựa bựa, hay chọc dev, vibe hài hước. Tên là "Soi Bug Bot" của @kieumanhhuy.
 
-NHIỆM VỤ: So sánh 2 screenshot UI (Hình 1=DEV, Hình 2=DESIGN chuẩn).
+🤖 THÔNG TIN BOT:
+- Hỏi "bot của ai?" / "ai tạo bot?" → Trả lời: "Bot của anh @kieumanhhuy đẹp trai tạo ra nha! 😎"
+- Hỏi "bot làm gì?" → "Tao soi bug UI cho dev, gửi /check rồi gửi 2 hình DEV vs DESIGN là tao soi liền!"
+- Chat xàm xàm → "Ê ê, muốn biết gì thì hỏi ông chủ @kieumanhhuy đi nha! Tao chỉ biết soi bug thôi 🙈"
 
-⚠️ SOI KỸ ALIGNMENT:
-- Kẻ đường ngang ảo: các text/element cùng hàng có thẳng không?
-- Kẻ đường dọc ảo: các element cùng cột có thẳng không?
-- Text baseline có align không?
-- Icon có căn giữa với text không?
-- Button/card có align với nhau không?
-- Left edge, right edge có thẳng hàng không?
+SO SÁNH UI: Hình 1 = DEV, Hình 2 = DESIGN chuẩn.
+CHỈ CHECK: SPACING, ALIGNMENT, COLOR, COMPONENT
+QUY TẮC: Chỉ báo lỗi GỐC, không báo hậu quả.
 
-⚠️ SOI KỸ SPACING:
-- Padding trong element
-- Margin giữa các element
-- Gap không đều
-- Khoảng cách trên/dưới/trái/phải
+FORMAT MỖI BUG:
+🔴 [Vị trí]: [Lỗi gì] | Design: [X] | Dev: [Y]
 
-FORMAT:
-🔴 Bug 1: [vị trí cụ thể] - [lỗi gì: lệch ngang/dọc/spacing bao nhiêu] - Fix: [sửa thế nào]
-🔴 Bug 2: ...
+📊 Tổng: X lỗi
 
-📊 Tổng: X bugs
+CUỐI CÙNG thêm 1 câu bựa random kiểu:
+- Nhiều bug (>3): "Dev ơi về học lại CSS đi 😭", "Mắt dev để ở nhà hả?", "Designer khóc thét rồi đó", "Đuổi việc hết cho rồi 🔥", "Làm lại đi con, nhìn muốn đột quỵ 💀"
+- Ít bug (1-3): "Gần ngon rồi, cố lên dev ơi!", "Tạm chấp nhận được 😏", "Còn vài lỗi nhỏ xíu thôi!"
+- 0 bug: "Ủa ngon vậy? Dev hôm nay uống thuốc gì? 🔥", "Perfect luôn, cho dev tăng lương đi sếp ơi! 💰", "Đỉnh của chóp! 🏆"
+"""
 
-[1 câu bựa: "Dev ơi lệch tùm lum 😭" hoặc "Ngon lành cành đào 👍"]
+        # Special prompt for getting structured bug data with coordinates
+        self.qc_json_prompt = """Bạn là Senior QC UI cực kỳ khắt khe, soi từng pixel.
+
+HÌNH 1 = DEV (cần check)
+HÌNH 2 = DESIGN (chuẩn)
+
+🔍 CHECK KỸ 3 LOẠI LỖI:
+
+1️⃣ SPACING - Khoảng cách:
+- ⭐ PADDING TRÁI/PHẢI của container, card, section - SO SÁNH CHÍNH XÁC với design!
+- ⭐ Padding trong button/card/input - đo pixel chênh lệch!
+- Margin giữa các element không đều?
+- Gap giữa items khác design?
+- Khoảng cách text-icon, text-border?
+
+2️⃣ ALIGNMENT - Căn chỉnh:
+- ⭐⭐ VERTICAL ALIGNMENT (Thẳng hàng DỌC) - RẤT QUAN TRỌNG:
+  + Kẻ đường dọc ảo từ trên xuống dưới - các element có thẳng hàng không?
+  + Cạnh TRÁI của các element có thẳng hàng với nhau không?
+  + Cạnh PHẢI của các element có thẳng hàng với nhau không?
+  + Text/button/card có bị lệch sang trái/phải so với design không?
+- Horizontal alignment (thẳng hàng ngang):
+  + Elements cùng hàng có cùng độ cao không?
+- Text không căn giữa/trái/phải đúng?
+- Icon không căn giữa với text?
+
+3️⃣ COLOR - Màu sắc:
+- Màu background khác design?
+- Màu text khác design?
+- Màu border/stroke khác design?
+- Màu button/icon khác design?
+
+⚠️ KỸ THUẬT SOI:
+- Với mỗi row/section: Kẻ đường dọc ảo ở cạnh trái và cạnh phải → check alignment
+- So sánh padding-left và padding-right của DEV vs DESIGN
+- Chú ý các element bị "lệch" dù chỉ vài pixel
+
+TRẢ VỀ JSON - MỖI LỖI 1 OBJECT:
+```json
+[
+  {
+    "bug": "Mô tả ngắn gọn lỗi cụ thể",
+    "type": "SPACING|ALIGNMENT|COLOR",
+    "x": 0.0-1.0,
+    "y": 0.0-1.0,
+    "w": 0.0-1.0,
+    "h": 0.0-1.0
+  }
+]
+```
+
+x,y = góc trên trái (0=trái/trên, 1=phải/dưới)
+w,h = kích thước vùng lỗi
+
+CHỈ TRẢ JSON. Không có bug → []
 """
 
     def get_conversation_stats(self, chat_id: int) -> tuple[int, int]:
@@ -463,6 +514,110 @@ FORMAT:
             answer += f"\n\n---\n💰 {tokens_used} {localized_text('stats_tokens', self.config['bot_language'])}"
 
         yield answer, tokens_used
+
+    async def analyze_images_for_bugs(self, image1_bytes, image2_bytes, analysis_info="", ssim_diff_bytes=None, edge_diff_bytes=None) -> list:
+        """
+        Analyze images and return structured bug data with coordinates.
+        Sends DEV, DESIGN, SSIM diff, and Edge diff images to Claude.
+        Returns list of bugs with x, y, w, h coordinates (0.0-1.0 scale).
+        """
+        import json as json_module
+
+        # Encode images
+        image1_bytes.seek(0)
+        image2_bytes.seek(0)
+        image1_data = base64.b64encode(image1_bytes.read()).decode('utf-8')
+        image2_data = base64.b64encode(image2_bytes.read()).decode('utf-8')
+
+        # Build prompt with analysis info
+        prompt = self.qc_json_prompt
+        if analysis_info:
+            prompt = prompt + f"\n\n{analysis_info}"
+
+        # Add image explanations
+        prompt += "\n\n🖼️ CÁC HÌNH GỬI KÈM:\n"
+        prompt += "- HÌNH 1 = DEV (cần check)\n"
+        prompt += "- HÌNH 2 = DESIGN (chuẩn)\n"
+
+        if ssim_diff_bytes:
+            prompt += "- HÌNH 3 = SSIM DIFF: Màu ĐỎ = khác biệt cấu trúc, XANH = giống\n"
+
+        if edge_diff_bytes:
+            img_num = 4 if ssim_diff_bytes else 3
+            prompt += f"- HÌNH {img_num} = EDGE COMPARISON (Alignment Check):\n"
+            prompt += "  + TRẮNG = cạnh khớp nhau\n"
+            prompt += "  + XANH LÁ = cạnh chỉ có ở DEV (thừa)\n"
+            prompt += "  + ĐỎ = cạnh chỉ có ở DESIGN (thiếu trong DEV)\n"
+            prompt += "  → Check kỹ các đường ĐỎ và XANH LÁ để tìm lỗi ALIGNMENT và PADDING!\n"
+
+        content = [
+            {'type': 'text', 'text': prompt},
+            {
+                'type': 'image',
+                'source': {
+                    'type': 'base64',
+                    'media_type': 'image/png',
+                    'data': image1_data
+                }
+            },
+            {
+                'type': 'image',
+                'source': {
+                    'type': 'base64',
+                    'media_type': 'image/png',
+                    'data': image2_data
+                }
+            }
+        ]
+
+        # Add SSIM diff image if available
+        if ssim_diff_bytes:
+            ssim_diff_bytes.seek(0)
+            ssim_diff_data = base64.b64encode(ssim_diff_bytes.read()).decode('utf-8')
+            content.append({
+                'type': 'image',
+                'source': {
+                    'type': 'base64',
+                    'media_type': 'image/png',
+                    'data': ssim_diff_data
+                }
+            })
+
+        # Add Edge diff image if available
+        if edge_diff_bytes:
+            edge_diff_bytes.seek(0)
+            edge_diff_data = base64.b64encode(edge_diff_bytes.read()).decode('utf-8')
+            content.append({
+                'type': 'image',
+                'source': {
+                    'type': 'base64',
+                    'media_type': 'image/png',
+                    'data': edge_diff_data
+                }
+            })
+
+        try:
+            response = await self.claude_client.messages.create(
+                model=self.config['vision_model'],
+                max_tokens=2000,
+                messages=[{'role': 'user', 'content': content}],
+                temperature=0.1,
+            )
+
+            result_text = response.content[0].text.strip()
+
+            # Extract JSON from response
+            if '```json' in result_text:
+                result_text = result_text.split('```json')[1].split('```')[0]
+            elif '```' in result_text:
+                result_text = result_text.split('```')[1].split('```')[0]
+
+            bugs = json_module.loads(result_text)
+            return bugs if isinstance(bugs, list) else []
+
+        except Exception as e:
+            logging.error(f"Error analyzing images: {e}")
+            return []
 
     def reset_chat_history(self, chat_id, content=''):
         """
