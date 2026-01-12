@@ -11,7 +11,13 @@ from openai import AsyncOpenAI
 import os
 from weather import get_weather, get_forecast
 
-openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+openai_client = None
+
+def get_openai_client():
+    global openai_client
+    if openai_client is None:
+        openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+    return openai_client
 
 from utils import summarize_url, fetch_page_with_playwright  # ✅ thêm hàm mới
 from uuid import uuid4
@@ -24,6 +30,8 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, \
 
 from pydub import AudioSegment
 from PIL import Image
+
+from image_diff import create_diff_image, create_side_by_side_diff
 
 from utils import is_group_chat, get_thread_id, message_text, wrap_with_indicator, split_into_chunks, \
     edit_message_with_retry, get_stream_cutoff_values, is_allowed, get_remaining_budget, is_admin, is_within_budget, \
@@ -52,7 +60,7 @@ async def extract_city_from_text(text: str) -> str:
         "Nếu không rõ hoặc không có địa danh, chỉ trả về \"\" (chuỗi rỗng)."
     )
     try:
-        response = await openai_client.chat.completions.create(
+        response = await get_openai_client().chat.completions.create(
             model="gpt-4",
             messages=[{"role": "user", "content": prompt}],
             max_tokens=10,
@@ -137,10 +145,8 @@ class ChatGPTTelegramBot:
         self.openai = openai
         bot_language = self.config['bot_language']
         self.commands = [
-            #BotCommand(command='help', description=localized_text('help_description', bot_language)),
+            BotCommand(command='check', description='Bắt đầu check bug giữa 2 hình'),
             BotCommand(command='reset', description=localized_text('reset_description', bot_language)),
-            #BotCommand(command='stats', description=localized_text('stats_description', bot_language)),
-            #BotCommand(command='resend', description=localized_text('resend_description', bot_language))
         ]
         # If imaging is enabled, add the "image" command to the list
         #if self.config.get('enable_image_generation', False):
@@ -157,6 +163,7 @@ class ChatGPTTelegramBot:
         self.usage = {}
         self.last_message = {}
         self.inline_queries_cache = {}
+        self.pending_compare = {}  # Store comparison state: {chat_id: {'state': 'waiting_dev'|'waiting_design', 'dev_image': ...}}
 
     async def summarize_and_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
@@ -348,6 +355,27 @@ class ChatGPTTelegramBot:
 
         await self.prompt(update=update, context=context)
 
+    async def check(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Start the bug check flow - compare DEV vs DESIGN images.
+        """
+        chat_id = update.effective_chat.id
+
+        # Initialize comparison state
+        self.pending_compare[chat_id] = {
+            'state': 'waiting_dev',
+            'dev_image': None,
+            'design_image': None
+        }
+
+        await update.effective_message.reply_text(
+            "🔍 **BẮT ĐẦU CHECK BUG**\n\n"
+            "📤 Gửi hình **DEV** (hình cần check) trước nha!\n\n"
+            "💡 Gửi /reset để huỷ",
+            parse_mode='Markdown'
+        )
+        logging.info(f'Started check flow for chat {chat_id}')
+
     async def reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         Resets the conversation.
@@ -364,9 +392,14 @@ class ChatGPTTelegramBot:
         chat_id = update.effective_chat.id
         reset_content = message_text(update.message)
         self.openai.reset_chat_history(chat_id=chat_id, content=reset_content)
+
+        # Clear pending comparison
+        if chat_id in self.pending_compare:
+            del self.pending_compare[chat_id]
+
         await update.effective_message.reply_text(
             message_thread_id=get_thread_id(update),
-            text=localized_text('reset_done', self.config['bot_language'])
+            text="✅ Đã reset! Gửi /check để bắt đầu check bug mới."
         )
 
     async def image(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -589,7 +622,8 @@ class ChatGPTTelegramBot:
 
     async def vision(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
-        Interpret image using vision model.
+        Interpret image using vision model. Supports 2-image comparison.
+        Send 2 images (one at a time) to compare design vs dev.
         """
         if not self.config['enable_vision'] or not await self.check_allowed_and_within_budget(update, context):
             return
@@ -613,7 +647,84 @@ class ChatGPTTelegramBot:
 
         image = update.message.effective_attachment[-1]
 
+        # Download image
+        try:
+            media_file = await context.bot.get_file(image.file_id)
+            temp_file = io.BytesIO(await media_file.download_as_bytearray())
+            original_image = Image.open(temp_file)
+            temp_file_png = io.BytesIO()
+            original_image.save(temp_file_png, format='PNG')
+        except Exception as e:
+            logging.exception(e)
+            await update.effective_message.reply_text("❌ Lỗi tải hình!")
+            return
 
+        # Check comparison flow state
+        if chat_id not in self.pending_compare:
+            # No active flow - ask user to start with /check
+            await update.effective_message.reply_text(
+                "🤔 Ê, gửi /check trước để bắt đầu check bug nha!\n\n"
+                "📋 Flow: /check → Gửi hình DEV → Gửi hình DESIGN → Xem bug"
+            )
+            return
+
+        state = self.pending_compare[chat_id]['state']
+
+        if state == 'waiting_dev':
+            # Received DEV image
+            self.pending_compare[chat_id]['dev_image'] = temp_file_png
+            self.pending_compare[chat_id]['state'] = 'waiting_design'
+
+            await update.effective_message.reply_text(
+                "✅ **Đã nhận hình DEV!**\n\n"
+                "📤 Giờ gửi hình **DESIGN** (hình chuẩn) đi!\n\n"
+                "💡 Gửi /reset để huỷ",
+                parse_mode='Markdown'
+            )
+            logging.info(f'Received DEV image for chat {chat_id}')
+            return
+
+        elif state == 'waiting_design':
+            # Received DESIGN image - time to compare!
+            dev_image = self.pending_compare[chat_id]['dev_image']
+
+            # Clear state
+            del self.pending_compare[chat_id]
+
+            await update.effective_message.reply_text("🔍 Đang so sánh 2 hình...")
+
+            # Generate visual diff image to pinpoint differences
+            try:
+                diff_image, diff_count = create_diff_image(dev_image, temp_file_png)
+                if diff_image and diff_count > 0:
+                    await update.effective_message.reply_photo(
+                        photo=diff_image,
+                        caption=f"📍 **Phát hiện {diff_count} vùng khác biệt!**\n\n"
+                                f"Các ô đỏ đánh dấu vị trí khác biệt giữa DEV và DESIGN.",
+                        parse_mode='Markdown'
+                    )
+                elif diff_image and diff_count == 0:
+                    await update.effective_message.reply_text(
+                        "✅ Không phát hiện khác biệt pixel rõ ràng!\n"
+                        "GPT-4o sẽ kiểm tra chi tiết hơn..."
+                    )
+            except Exception as e:
+                logging.warning(f"Could not generate diff image: {e}")
+                # Continue with GPT-4o analysis even if diff fails
+
+            final_prompt = prompt or "Hình 1 là DEV (cần check), Hình 2 là DESIGN (chuẩn). So sánh và tìm tất cả điểm khác biệt."
+
+            logging.info(f'Comparing DEV vs DESIGN for chat {chat_id}')
+
+            # Reset image positions for GPT-4o
+            dev_image.seek(0)
+            temp_file_png.seek(0)
+
+            # Process both images with GPT-4o
+            await self._process_vision(update, context, chat_id, [dev_image, temp_file_png], final_prompt)
+            return
+
+        # Fallback - shouldn't reach here
         async def _execute():
             bot_language = self.config['bot_language']
             try:
@@ -779,6 +890,97 @@ class ChatGPTTelegramBot:
             allowed_user_ids = self.config['allowed_user_ids'].split(',')
             if str(user_id) not in allowed_user_ids and 'guests' in self.usage:
                 self.usage["guests"].add_vision_tokens(total_tokens, vision_token_price)
+
+        await wrap_with_indicator(update, context, _execute, constants.ChatAction.TYPING)
+
+    async def _process_vision(self, update: Update, context: ContextTypes.DEFAULT_TYPE, chat_id, images, prompt):
+        """
+        Process multiple images for comparison.
+        """
+        bot_language = self.config['bot_language']
+        user_id = update.message.from_user.id
+
+        if user_id not in self.usage:
+            self.usage[user_id] = UsageTracker(user_id, update.message.from_user.name)
+
+        async def _execute():
+            if self.config['stream']:
+                stream_response = self.openai.interpret_image_stream(chat_id=chat_id, fileobj=images, prompt=prompt)
+                i = 0
+                prev = ''
+                sent_message = None
+                backoff = 0
+                stream_chunk = 0
+                total_tokens = 0
+
+                async for content, tokens in stream_response:
+                    if is_direct_result(content):
+                        return await handle_direct_result(self.config, update, content)
+
+                    if len(content.strip()) == 0:
+                        continue
+
+                    stream_chunks = split_into_chunks(content)
+                    if len(stream_chunks) > 1:
+                        content = stream_chunks[-1]
+                        if stream_chunk != len(stream_chunks) - 1:
+                            stream_chunk += 1
+                            try:
+                                await edit_message_with_retry(context, chat_id, str(sent_message.message_id),
+                                                              stream_chunks[-2])
+                            except:
+                                pass
+                            try:
+                                sent_message = await update.effective_message.reply_text(
+                                    message_thread_id=get_thread_id(update),
+                                    text=content if len(content) > 0 else "..."
+                                )
+                            except:
+                                pass
+                            continue
+
+                    cutoff = get_stream_cutoff_values(update, content)
+                    cutoff += backoff
+
+                    if i == 0:
+                        try:
+                            if sent_message is not None:
+                                await context.bot.delete_message(chat_id=sent_message.chat_id,
+                                                                 message_id=sent_message.message_id)
+                            sent_message = await update.effective_message.reply_text(
+                                message_thread_id=get_thread_id(update),
+                                reply_to_message_id=get_reply_to_message_id(self.config, update),
+                                text=content,
+                            )
+                        except:
+                            continue
+
+                    elif abs(len(content) - len(prev)) > cutoff or tokens != 'not_finished':
+                        prev = content
+                        try:
+                            use_markdown = tokens != 'not_finished'
+                            await edit_message_with_retry(context, chat_id, str(sent_message.message_id),
+                                                          text=content, markdown=use_markdown)
+                        except RetryAfter as e:
+                            backoff += 5
+                            await asyncio.sleep(e.retry_after)
+                            continue
+                        except TimedOut:
+                            backoff += 5
+                            await asyncio.sleep(0.5)
+                            continue
+                        except Exception:
+                            backoff += 5
+                            continue
+
+                        await asyncio.sleep(0.01)
+
+                    i += 1
+                    if tokens != 'not_finished':
+                        total_tokens = int(tokens)
+
+                vision_token_price = self.config['vision_token_price']
+                self.usage[user_id].add_vision_tokens(total_tokens, vision_token_price)
 
         await wrap_with_indicator(update, context, _execute, constants.ChatAction.TYPING)
 
@@ -1238,6 +1440,7 @@ class ChatGPTTelegramBot:
             .build()
 
         application.add_handler(CommandHandler('reset', self.reset))
+        application.add_handler(CommandHandler('check', self.check))
         #application.add_handler(CommandHandler('help', self.help))
         #application.add_handler(CommandHandler('image', self.image))
         #application.add_handler(CommandHandler('tts', self.tts))
