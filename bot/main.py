@@ -27,7 +27,7 @@ def main():
         exit(1)
 
     # Setup configurations
-    model = os.environ.get('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022')
+    model = os.environ.get('CLAUDE_MODEL', 'claude-sonnet-4-20250514')
     functions_available = are_functions_available(model=model)
     max_tokens_default = default_max_tokens(model=model)
     openai_config = {
@@ -54,7 +54,7 @@ def main():
         'bot_language': os.environ.get('BOT_LANGUAGE', 'en'),
         'show_plugins_used': os.environ.get('SHOW_PLUGINS_USED', 'false').lower() == 'true',
         'whisper_prompt': os.environ.get('WHISPER_PROMPT', ''),
-        'vision_model': os.environ.get('VISION_MODEL', 'claude-3-5-sonnet-20241022'),
+        'vision_model': os.environ.get('VISION_MODEL', 'claude-sonnet-4-20250514'),
         'enable_vision_follow_up_questions': os.environ.get('ENABLE_VISION_FOLLOW_UP_QUESTIONS', 'true').lower() == 'true',
         'vision_prompt': os.environ.get('VISION_PROMPT', 'What is in this image'),
         'vision_detail': os.environ.get('VISION_DETAIL', 'auto'),

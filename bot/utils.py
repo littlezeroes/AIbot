@@ -103,7 +103,7 @@ async def summarize_url(url: str, update: Update = None, context: CallbackContex
     try:
         client = get_claude_client()
         response = await client.messages.create(
-            model="claude-3-5-sonnet-20241022",
+            model="claude-sonnet-4-20250514",
             max_tokens=500,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5,
