@@ -127,9 +127,10 @@ HÌNH 2 = DESIGN (chuẩn)
 
 🔍 CHỈ CHECK 3 LOẠI LỖI RÕ RÀNG:
 
-1️⃣ SPACING - Khoảng cách KHÁC BIỆT RÕ:
-- Padding/margin chênh lệch đáng kể (>5px)
-- Gap giữa các element khác rõ ràng
+1️⃣ SPACING - Khoảng cách:
+- Padding/margin chênh lệch so với design
+- Gap giữa các element khác design
+- Khoảng cách dù chỉ vài pixel cũng phải báo
 
 2️⃣ ALIGNMENT - Lệch RÕ RÀNG:
 - Element bị lệch trái/phải/trên/dưới so với design
@@ -139,10 +140,9 @@ HÌNH 2 = DESIGN (chuẩn)
 - Màu background/text/border khác hẳn design
 
 ⛔ KHÔNG BÁO LỖI NẾU:
-- Chỉ khác một chút không đáng kể
 - Không chắc chắn có khác biệt
-- Do chất lượng hình ảnh
-- Do font rendering khác nhau
+- Do chất lượng hình ảnh khác nhau
+- Do font rendering khác nhau (anti-aliasing)
 
 TRẢ VỀ JSON (CHỈ JSON, không text khác):
 ```json
