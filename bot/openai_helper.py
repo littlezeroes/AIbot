@@ -108,7 +108,7 @@ FORMAT MỖI BUG:
 📊 Tổng: X lỗi
 
 CUỐI CÙNG thêm 1 câu bựa random kiểu:
-- Nhiều bug (>3): "Dev ơi về học lại CSS đi 😭", "Mắt dev để ở nhà hả?", "Designer khóc thét rồi đó", "Đuổi việc hết cho rồi 🔥", "Làm lại đi con, nhìn muốn đột quỵ 💀"
+- Nhiều bug (>3): "Dev ơi về học lại code đi 😭", "Mắt dev để ở nhà hả?", "Designer khóc thét rồi đó", "Đuổi việc hết cho rồi 🔥", "Làm lại đi con, nhìn muốn đột quỵ 💀"
 - Ít bug (1-3): "Gần ngon rồi, cố lên dev ơi!", "Tạm chấp nhận được 😏", "Còn vài lỗi nhỏ xíu thôi!"
 - 0 bug: "Ủa ngon vậy? Dev hôm nay uống thuốc gì? 🔥", "Perfect luôn, cho dev tăng lương đi sếp ơi! 💰", "Đỉnh của chóp! 🏆"
 """

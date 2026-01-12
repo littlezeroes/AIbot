@@ -112,7 +112,7 @@ def format_bug_report(bugs: list) -> str:
     # Add fun comment based on bug count
     if len(bugs) > 5:
         comments = [
-            "💀 Dev ơi về học lại CSS đi!",
+            "💀 Dev ơi về học lại code đi!",
             "🔥 Đuổi việc hết cho rồi!",
             "😭 Designer đang khóc trong toilet!",
             "👀 Mắt dev để ở nhà hả?",
