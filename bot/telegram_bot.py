@@ -146,6 +146,7 @@ class ChatGPTTelegramBot:
         bot_language = self.config['bot_language']
         self.commands = [
             BotCommand(command='check', description='Bắt đầu check bug giữa 2 hình'),
+            BotCommand(command='feedback', description='Feedback design như Steve Jobs'),
             BotCommand(command='reset', description=localized_text('reset_description', bot_language)),
         ]
         # If imaging is enabled, add the "image" command to the list
@@ -165,6 +166,7 @@ class ChatGPTTelegramBot:
         self.inline_queries_cache = {}
         self.pending_compare = {}  # Store comparison state: {chat_id: {'state': 'waiting_dev'|'waiting_design', 'dev_image': ...}}
         self.last_compare = {}  # Store last compared images for re-check: {chat_id: {'dev': bytes, 'design': bytes}}
+        self.pending_feedback = set()  # Store chat_ids waiting for feedback image
 
     async def summarize_and_reply(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
@@ -474,6 +476,109 @@ Soi từng pixel DEV vs DESIGN, tìm bug như tìm mụn trên mặt vậy đó!
             logging.error(f"Error in recheck: {e}")
             await update.effective_message.reply_text(f"❌ Lỗi khi check lại: {e}")
 
+    async def feedback(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """
+        Start feedback mode - critique design like Steve Jobs.
+        """
+        chat_id = update.effective_chat.id
+        self.pending_feedback.add(chat_id)
+
+        await update.effective_message.reply_text(
+            "🎯 **STEVE JOBS MODE ON!**\n\n"
+            "📤 Quăng design vô đây để tao chê như Steve Jobs!\n\n"
+            "⚠️ Chuẩn bị tinh thần nghe feedback thật nhé 😤\n"
+            "💡 Gửi /reset nếu đổi ý",
+            parse_mode='Markdown'
+        )
+        logging.info(f'Started feedback mode for chat {chat_id}')
+
+    async def give_steve_jobs_feedback(self, update: Update, context: ContextTypes.DEFAULT_TYPE, image_bytes):
+        """
+        Give Steve Jobs style feedback on a design.
+        """
+        chat_id = update.effective_chat.id
+        self.pending_feedback.discard(chat_id)
+
+        await update.effective_message.reply_text("🧐 Để tao nhìn cái design này như Steve Jobs...")
+
+        steve_jobs_prompt = """Bạn là Steve Jobs - người có con mắt thiết kế khắt khe nhất thế giới.
+
+TÍNH CÁCH KHI FEEDBACK:
+- Cực kỳ khắt khe, đòi hỏi sự HOÀN HẢO
+- Ghét sự phức tạp không cần thiết - "Simplicity is the ultimate sophistication"
+- Focus vào USER EXPERIENCE - mọi thứ phải intuitive
+- Không chấp nhận "good enough" - chỉ chấp nhận "insanely great"
+- Thẳng thắn, không ngại hurt feelings để có sản phẩm tốt
+- Hay dùng các câu iconic: "This is shit", "It's not good enough", "Start over", "Think different"
+
+CÁCH FEEDBACK:
+1. Nhìn tổng thể design và đánh giá first impression
+2. Chỉ ra những điểm YẾU về:
+   - Visual hierarchy - mắt người dùng nhìn vào đâu trước?
+   - Simplicity - có element nào thừa không?
+   - Typography - font có clean không? Spacing đúng chưa?
+   - Color - màu sắc có harmony không? Có quá nhiều màu không?
+   - Whitespace - có đủ "room to breathe" không?
+   - User flow - người dùng có biết làm gì tiếp theo không?
+3. Cho điểm từ 1-10 theo tiêu chuẩn Apple
+4. Kết thúc bằng một câu motivational kiểu Steve Jobs
+
+FORMAT:
+🍎 **STEVE JOBS FEEDBACK**
+
+**First Impression:** [Phản ứng đầu tiên - thường là harsh]
+
+**Những điểm CẦN SỬA:**
+[Liệt kê các vấn đề, mỗi điểm bắt đầu bằng ❌]
+
+**Những điểm TẠM ĐƯỢC:**
+[Nếu có điểm tốt, bắt đầu bằng ✓]
+
+**Điểm số:** X/10 🍎
+
+**Lời khuyên của Steve:** [Một câu quote phong cách Steve Jobs]
+
+Hãy feedback design này như thể bạn đang review sản phẩm cho Apple. Không cần tử tế - cần THẬT.
+"""
+
+        import base64
+        image_bytes.seek(0)
+        image_data = base64.b64encode(image_bytes.read()).decode('utf-8')
+
+        content = [
+            {'type': 'text', 'text': steve_jobs_prompt},
+            {
+                'type': 'image',
+                'source': {
+                    'type': 'base64',
+                    'media_type': 'image/png',
+                    'data': image_data
+                }
+            }
+        ]
+
+        try:
+            response = await self.openai.claude_client.messages.create(
+                model=self.config.get('vision_model', 'claude-sonnet-4-20250514'),
+                max_tokens=1500,
+                messages=[{'role': 'user', 'content': content}],
+                temperature=0.8,
+            )
+
+            feedback_text = response.content[0].text.strip()
+
+            # Split if too long for Telegram
+            if len(feedback_text) > 4000:
+                feedback_text = feedback_text[:4000] + "..."
+
+            await update.effective_message.reply_text(feedback_text, parse_mode='Markdown')
+
+        except Exception as e:
+            logging.error(f"Error giving Steve Jobs feedback: {e}")
+            await update.effective_message.reply_text(
+                f"❌ Lỗi: {e}\n\nSteve Jobs would say: 'This is unacceptable!'"
+            )
+
     async def reset(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
         Resets the conversation.
@@ -491,13 +596,14 @@ Soi từng pixel DEV vs DESIGN, tìm bug như tìm mụn trên mặt vậy đó!
         reset_content = message_text(update.message)
         self.openai.reset_chat_history(chat_id=chat_id, content=reset_content)
 
-        # Clear pending comparison
+        # Clear pending comparison and feedback
         if chat_id in self.pending_compare:
             del self.pending_compare[chat_id]
+        self.pending_feedback.discard(chat_id)
 
         await update.effective_message.reply_text(
             message_thread_id=get_thread_id(update),
-            text="✅ Đã reset! Gửi /check để bắt đầu check bug mới."
+            text="✅ Đã reset!\n/check → Check bug\n/feedback → Steve Jobs feedback"
         )
 
     async def image(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -757,12 +863,18 @@ Soi từng pixel DEV vs DESIGN, tìm bug như tìm mụn trên mặt vậy đó!
             await update.effective_message.reply_text("❌ Lỗi tải hình!")
             return
 
+        # Check for feedback mode first
+        if chat_id in self.pending_feedback:
+            await self.give_steve_jobs_feedback(update, context, temp_file_png)
+            return
+
         # Check comparison flow state
         if chat_id not in self.pending_compare:
-            # No active flow - ask user to start with /check
+            # No active flow - ask user to start with /check or /feedback
             await update.effective_message.reply_text(
-                "🤔 Ê ê, gửi /check trước đi rồi hẵng quăng hình!\n\n"
-                "📋 Flow: /check → Quăng DEV → Quăng DESIGN → Tao soi\n"
+                "🤔 Ê ê, gửi lệnh trước đi rồi hẵng quăng hình!\n\n"
+                "📋 /check → So sánh DEV vs DESIGN\n"
+                "🎯 /feedback → Steve Jobs feedback\n"
                 "🤖 Bot by @kieumanhhuy"
             )
             return
@@ -1600,6 +1712,7 @@ Soi từng pixel DEV vs DESIGN, tìm bug như tìm mụn trên mặt vậy đó!
 
         application.add_handler(CommandHandler('reset', self.reset))
         application.add_handler(CommandHandler('check', self.check))
+        application.add_handler(CommandHandler('feedback', self.feedback))
         #application.add_handler(CommandHandler('help', self.help))
         #application.add_handler(CommandHandler('image', self.image))
         #application.add_handler(CommandHandler('tts', self.tts))
