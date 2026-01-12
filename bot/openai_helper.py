@@ -113,49 +113,35 @@ CUỐI CÙNG thêm 1 câu bựa random kiểu:
 - 0 bug: "Ủa ngon vậy? Dev hôm nay uống thuốc gì? 🔥", "Perfect luôn, cho dev tăng lương đi sếp ơi! 💰", "Đỉnh của chóp! 🏆"
 """
 
-        # Special prompt for getting structured bug data with coordinates
-        self.qc_json_prompt = """Bạn là Senior QC UI cực kỳ khắt khe, soi từng pixel.
+        # Special prompt for ROOT CAUSE analysis (used with pixelmatch diff)
+        self.qc_json_prompt = """Bạn là Senior QC UI. Pixelmatch đã phát hiện các VÙNG khác biệt (đánh dấu đỏ).
 
-HÌNH 1 = DEV (cần check)
-HÌNH 2 = DESIGN (chuẩn)
+⚠️ NHIỆM VỤ CỦA BẠN: Phân tích NGUYÊN NHÂN GỐC, KHÔNG liệt kê từng pixel.
 
-🔍 CHECK KỸ 3 LOẠI LỖI:
+📌 QUY TẮC QUAN TRỌNG:
+1. Nếu 1 lỗi spacing/alignment gây NHIỀU vùng lệch → chỉ báo 1 lỗi GỐC
+   VD: Padding top sai → cả section dưới lệch → báo 1 lỗi "Padding top"
+2. KHÔNG báo hậu quả, chỉ báo nguyên nhân
+3. Gộp các lỗi cùng nguyên nhân thành 1
 
-1️⃣ SPACING - Khoảng cách:
-- ⭐ PADDING TRÁI/PHẢI của container, card, section - SO SÁNH CHÍNH XÁC với design!
-- ⭐ Padding trong button/card/input - đo pixel chênh lệch!
-- Margin giữa các element không đều?
-- Gap giữa items khác design?
-- Khoảng cách text-icon, text-border?
+🔍 PHÂN LOẠI LỖI:
 
-2️⃣ ALIGNMENT - Căn chỉnh (PIXEL-PERFECT):
-- ⭐⭐ VERTICAL ALIGNMENT (Thẳng hàng DỌC) - RẤT QUAN TRỌNG:
-  + Kẻ đường dọc ảo từ trên xuống dưới - các element có thẳng hàng không?
-  + Cạnh TRÁI của các element có thẳng hàng với nhau không?
-  + Cạnh PHẢI của các element có thẳng hàng với nhau không?
-  + Text/button/card có bị lệch sang trái/phải so với design không?
-  + Lệch 1 PIXEL cũng phải báo!
-- Horizontal alignment (thẳng hàng ngang):
-  + Elements cùng hàng có cùng độ cao không?
-- Text không căn giữa/trái/phải đúng?
-- Icon không căn giữa với text?
+1️⃣ SPACING - Khoảng cách sai:
+- Padding/margin khác design
+- Gap giữa elements không đúng
 
-3️⃣ COLOR - Màu sắc:
-- Màu background khác design?
-- Màu text khác design?
-- Màu border/stroke khác design?
-- Màu button/icon khác design?
+2️⃣ ALIGNMENT - Căn chỉnh sai:
+- Element lệch trái/phải/trên/dưới
+- Không thẳng hàng với design
 
-⚠️ KỸ THUẬT SOI:
-- Với mỗi row/section: Kẻ đường dọc ảo ở cạnh trái và cạnh phải → check alignment
-- So sánh padding-left và padding-right của DEV vs DESIGN
-- Chú ý các element bị "lệch" dù chỉ vài pixel
+3️⃣ COLOR - Màu sắc sai:
+- Background/text/border khác màu
 
-TRẢ VỀ JSON - MỖI LỖI 1 OBJECT:
+TRẢ VỀ JSON:
 ```json
 [
   {
-    "bug": "Mô tả ngắn gọn lỗi cụ thể",
+    "bug": "Mô tả nguyên nhân GỐC cụ thể",
     "type": "SPACING|ALIGNMENT|COLOR",
     "x": 0.0-1.0,
     "y": 0.0-1.0,
@@ -165,10 +151,7 @@ TRẢ VỀ JSON - MỖI LỖI 1 OBJECT:
 ]
 ```
 
-x,y = góc trên trái (0=trái/trên, 1=phải/dưới)
-w,h = kích thước vùng lỗi
-
-CHỈ TRẢ JSON. Không có bug → []
+CHỈ TRẢ JSON. Không có lỗi → []
 """
 
     def get_conversation_stats(self, chat_id: int) -> tuple[int, int]:
@@ -451,11 +434,23 @@ CHỈ TRẢ JSON. Không có bug → []
 
         yield answer, tokens_used
 
-    async def analyze_images_for_bugs(self, image1_bytes, image2_bytes, analysis_info="", ssim_diff_bytes=None, edge_diff_bytes=None) -> list:
+    async def analyze_images_for_bugs(self, image1_bytes, image2_bytes, analysis_info="",
+                                       pixelmatch_diff_bytes=None, shift_analysis=None,
+                                       grouped_regions=None) -> list:
         """
-        Analyze images and return structured bug data with coordinates.
-        Sends DEV, DESIGN, SSIM diff, and Edge diff images to Claude.
-        Returns list of bugs with x, y, w, h coordinates (0.0-1.0 scale).
+        Analyze images and return structured bug data with ROOT CAUSE analysis.
+        Uses pixelmatch diff for accurate detection, Claude for description.
+
+        Args:
+            image1_bytes: DEV image
+            image2_bytes: DESIGN image
+            analysis_info: Additional analysis info text
+            pixelmatch_diff_bytes: Diff image from pixelmatch
+            shift_analysis: Dict with cascade/shift detection info
+            grouped_regions: List of detected difference regions
+
+        Returns:
+            List of bugs with x, y, w, h coordinates (0.0-1.0 scale)
         """
         import json as json_module
 
@@ -467,24 +462,31 @@ CHỈ TRẢ JSON. Không có bug → []
 
         # Build prompt with analysis info
         prompt = self.qc_json_prompt
+
+        # Add shift analysis info if cascade detected
+        if shift_analysis and shift_analysis.get('is_cascade'):
+            prompt += f"\n\n⚠️ PHÁT HIỆN CASCADE EFFECT:\n"
+            prompt += f"- Hướng: {shift_analysis.get('shift_direction', 'unknown')}\n"
+            prompt += f"- Ước tính lệch: ~{shift_analysis.get('estimated_shift_px', 0)}px\n"
+            prompt += f"- Số vùng bị ảnh hưởng: {shift_analysis.get('affected_regions', 0)}\n"
+            prompt += "→ CHỈ BÁO 1 LỖI GỐC (vùng đầu tiên), không báo các vùng bị ảnh hưởng!\n"
+
+        # Add region info
+        if grouped_regions:
+            prompt += f"\n\n📊 PIXELMATCH PHÁT HIỆN {len(grouped_regions)} VÙNG KHÁC BIỆT:\n"
+            for i, region in enumerate(grouped_regions[:5]):  # Max 5 regions
+                prompt += f"- Vùng #{i+1}: x={region['x']:.2f}, y={region['y']:.2f}\n"
+
         if analysis_info:
-            prompt = prompt + f"\n\n{analysis_info}"
+            prompt += f"\n\n{analysis_info}"
 
         # Add image explanations
         prompt += "\n\n🖼️ CÁC HÌNH GỬI KÈM:\n"
         prompt += "- HÌNH 1 = DEV (cần check)\n"
         prompt += "- HÌNH 2 = DESIGN (chuẩn)\n"
 
-        if ssim_diff_bytes:
-            prompt += "- HÌNH 3 = SSIM DIFF: Màu ĐỎ = khác biệt cấu trúc, XANH = giống\n"
-
-        if edge_diff_bytes:
-            img_num = 4 if ssim_diff_bytes else 3
-            prompt += f"- HÌNH {img_num} = EDGE COMPARISON (Alignment Check):\n"
-            prompt += "  + TRẮNG = cạnh khớp nhau\n"
-            prompt += "  + XANH LÁ = cạnh chỉ có ở DEV (thừa)\n"
-            prompt += "  + ĐỎ = cạnh chỉ có ở DESIGN (thiếu trong DEV)\n"
-            prompt += "  → Check kỹ các đường ĐỎ và XANH LÁ để tìm lỗi ALIGNMENT và PADDING!\n"
+        if pixelmatch_diff_bytes:
+            prompt += "- HÌNH 3 = PIXELMATCH DIFF: Vùng ĐỎ = khác biệt pixel chính xác\n"
 
         content = [
             {'type': 'text', 'text': prompt},
@@ -506,29 +508,16 @@ CHỈ TRẢ JSON. Không có bug → []
             }
         ]
 
-        # Add SSIM diff image if available
-        if ssim_diff_bytes:
-            ssim_diff_bytes.seek(0)
-            ssim_diff_data = base64.b64encode(ssim_diff_bytes.read()).decode('utf-8')
+        # Add pixelmatch diff image
+        if pixelmatch_diff_bytes:
+            pixelmatch_diff_bytes.seek(0)
+            pixelmatch_diff_data = base64.b64encode(pixelmatch_diff_bytes.read()).decode('utf-8')
             content.append({
                 'type': 'image',
                 'source': {
                     'type': 'base64',
                     'media_type': 'image/png',
-                    'data': ssim_diff_data
-                }
-            })
-
-        # Add Edge diff image if available
-        if edge_diff_bytes:
-            edge_diff_bytes.seek(0)
-            edge_diff_data = base64.b64encode(edge_diff_bytes.read()).decode('utf-8')
-            content.append({
-                'type': 'image',
-                'source': {
-                    'type': 'base64',
-                    'media_type': 'image/png',
-                    'data': edge_diff_data
+                    'data': pixelmatch_diff_data
                 }
             })
 
@@ -537,7 +526,7 @@ CHỈ TRẢ JSON. Không có bug → []
                 model=self.config['vision_model'],
                 max_tokens=2000,
                 messages=[{'role': 'user', 'content': content}],
-                temperature=0,  # 0 for consistent, accurate results
+                temperature=0,  # 0 for consistent results
             )
 
             result_text = response.content[0].text.strip()

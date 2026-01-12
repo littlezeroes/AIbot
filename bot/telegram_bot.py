@@ -435,29 +435,35 @@ Soi từng pixel DEV vs DESIGN, tìm bug như tìm mụn trên mặt vậy đó!
 
         logging.info(f'Re-checking images for chat {chat_id}')
 
-        # Run comparison again
-        from image_diff import draw_bugs_on_image, format_bug_report, create_ssim_diff, create_edge_comparison
+        # Run comparison again using pixelmatch
+        from image_diff import draw_bugs_on_image, format_bug_report, create_pixelmatch_diff
 
-        ssim_diff, ssim_score, diff_regions = create_ssim_diff(dev_image, design_image)
-        dev_image.seek(0)
-        design_image.seek(0)
-        edge_diff, alignment_info = create_edge_comparison(dev_image, design_image)
+        pixelmatch_diff, diff_count, grouped_regions, shift_analysis = create_pixelmatch_diff(
+            dev_image, design_image, threshold=0.1
+        )
 
-        analysis_info = ""
-        if ssim_diff:
-            analysis_info = f"📊 SSIM Score: {ssim_score:.2%}\n"
-            analysis_info += f"Phát hiện {len(diff_regions)} vùng khác biệt.\n"
-        if alignment_info:
-            analysis_info += f"\n📐 EDGE ANALYSIS:\n"
-            analysis_info += f"- Left padding diff: {alignment_info.get('left_padding_diff', 0)}px\n"
-            analysis_info += f"- Right padding diff: {alignment_info.get('right_padding_diff', 0)}px\n"
+        # If no differences, report immediately
+        if diff_count == 0 or not grouped_regions:
+            import random
+            comments = [
+                "✅ Check lại vẫn 0 bug! Pixelmatch xác nhận 🔥",
+                "✅ Vẫn perfect! Không có khác biệt nào 💯",
+            ]
+            await update.effective_message.reply_text(random.choice(comments))
+            return
+
+        analysis_info = f"📊 Pixelmatch: {diff_count} pixels khác biệt\n"
+        analysis_info += f"Phát hiện {len(grouped_regions)} vùng khác biệt.\n"
 
         dev_image.seek(0)
         design_image.seek(0)
 
         try:
             bugs = await self.openai.analyze_images_for_bugs(
-                dev_image, design_image, analysis_info, ssim_diff, edge_diff
+                dev_image, design_image, analysis_info,
+                pixelmatch_diff_bytes=pixelmatch_diff,
+                shift_analysis=shift_analysis,
+                grouped_regions=grouped_regions
             )
 
             if bugs:
@@ -922,32 +928,40 @@ Hãy feedback design này như thể bạn đang review sản phẩm cho Apple. 
 
             logging.info(f'Comparing DEV vs DESIGN for chat {chat_id}')
 
-            # Step 1: Create SSIM diff image
+            # Step 1: Use Pixelmatch for accurate pixel comparison
             dev_image.seek(0)
             temp_file_png.seek(0)
-            ssim_diff, ssim_score, diff_regions = create_ssim_diff(dev_image, temp_file_png)
 
-            # Step 2: Create Edge comparison for alignment detection
-            dev_image.seek(0)
-            temp_file_png.seek(0)
-            edge_diff, alignment_info = create_edge_comparison(dev_image, temp_file_png)
+            from image_diff import create_pixelmatch_diff
+            pixelmatch_diff, diff_count, grouped_regions, shift_analysis = create_pixelmatch_diff(
+                dev_image, temp_file_png, threshold=0.1
+            )
 
-            # Build analysis info for Claude
-            analysis_info = ""
-            if ssim_diff:
-                analysis_info = f"📊 SSIM Score: {ssim_score:.2%} (100% = giống hệt)\n"
-                analysis_info += f"Phát hiện {len(diff_regions)} vùng khác biệt cấu trúc.\n"
-                logging.info(f"SSIM score: {ssim_score:.2%}, regions: {len(diff_regions)}")
+            logging.info(f"Pixelmatch: {diff_count} different pixels, {len(grouped_regions)} regions")
 
-            if alignment_info:
-                analysis_info += f"\n📐 EDGE ANALYSIS (Alignment & Padding):\n"
-                analysis_info += f"- Left padding diff: {alignment_info.get('left_padding_diff', 0)}px\n"
-                analysis_info += f"- Right padding diff: {alignment_info.get('right_padding_diff', 0)}px\n"
-                analysis_info += f"- Vertical alignment issues: {alignment_info.get('vertical_alignment_issues', 0)}\n"
-                analysis_info += f"- Total edge diff: {alignment_info.get('total_edge_diff', 0)}px\n"
-                logging.info(f"Edge analysis: {alignment_info}")
+            # If no significant differences, report 0 bugs immediately
+            if diff_count == 0 or not grouped_regions:
+                import random
+                comments = [
+                    "✅ 0 bug! Pixelmatch xác nhận 2 hình giống y chang! 🔥",
+                    "✅ Perfect! Không tìm thấy khác biệt nào! 💰",
+                    "✅ Pixel-perfect! Dev đỉnh quá! 😍",
+                ]
+                await update.effective_message.reply_text(random.choice(comments))
+                return
 
-            # Step 3: Send DEV + DESIGN + SSIM diff + Edge diff to Claude
+            # Step 2: If cascade detected, log it
+            if shift_analysis.get('is_cascade'):
+                logging.info(f"Cascade effect detected: {shift_analysis}")
+
+            # Build analysis info
+            analysis_info = f"📊 Pixelmatch: {diff_count} pixels khác biệt\n"
+            analysis_info += f"Phát hiện {len(grouped_regions)} vùng khác biệt.\n"
+
+            if shift_analysis.get('is_cascade'):
+                analysis_info += f"\n⚠️ CASCADE EFFECT: Có thể 1 lỗi gốc gây lệch nhiều vùng\n"
+
+            # Step 3: Send to Claude for ROOT CAUSE analysis
             dev_image.seek(0)
             temp_file_png.seek(0)
 
@@ -956,10 +970,11 @@ Hãy feedback design này như thể bạn đang review sản phẩm cho Apple. 
                     dev_image,
                     temp_file_png,
                     analysis_info,
-                    ssim_diff,  # Pass SSIM diff image to Claude
-                    edge_diff   # Pass Edge comparison image to Claude
+                    pixelmatch_diff_bytes=pixelmatch_diff,
+                    shift_analysis=shift_analysis,
+                    grouped_regions=grouped_regions
                 )
-                logging.info(f'Claude found {len(bugs)} bugs')
+                logging.info(f'Claude found {len(bugs)} root cause bugs')
 
                 if bugs:
                     # Step 3: Draw boxes on DEV image based on Claude's coordinates

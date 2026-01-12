@@ -827,3 +827,271 @@ def create_edge_comparison(image1_bytes: io.BytesIO, image2_bytes: io.BytesIO) -
     except Exception as e:
         logging.error(f"Error creating edge comparison: {e}")
         return None, {}
+
+
+def create_pixelmatch_diff(image1_bytes: io.BytesIO, image2_bytes: io.BytesIO,
+                           threshold: float = 0.1) -> tuple:
+    """
+    Use pixelmatch for accurate pixel-level comparison with smart region grouping.
+
+    Args:
+        image1_bytes: DEV image
+        image2_bytes: DESIGN image
+        threshold: Matching threshold 0-1 (lower = more sensitive). Default 0.1
+
+    Returns:
+        Tuple of (diff_image_bytes, diff_count, grouped_regions, shift_analysis)
+        - diff_image_bytes: Visual diff image
+        - diff_count: Total different pixels
+        - grouped_regions: List of grouped difference regions
+        - shift_analysis: Analysis of vertical/horizontal shifts
+    """
+    from pixelmatch import pixelmatch
+
+    try:
+        image1_bytes.seek(0)
+        image2_bytes.seek(0)
+
+        pil_img1 = Image.open(image1_bytes).convert('RGBA')
+        pil_img2 = Image.open(image2_bytes).convert('RGBA')
+
+        # Resize to match
+        w1, h1 = pil_img1.size
+        w2, h2 = pil_img2.size
+        if (w1, h1) != (w2, h2):
+            pil_img2 = pil_img2.resize((w1, h1), Image.Resampling.LANCZOS)
+
+        # Create output diff image
+        diff_img = Image.new('RGBA', (w1, h1))
+
+        # Run pixelmatch
+        diff_count = pixelmatch(
+            pil_img1, pil_img2, diff_img,
+            threshold=threshold,
+            includeAA=False,  # Ignore anti-aliasing differences
+            alpha=0.1
+        )
+
+        logging.info(f"Pixelmatch found {diff_count} different pixels")
+
+        # If very few differences, consider them identical
+        total_pixels = w1 * h1
+        diff_percentage = diff_count / total_pixels * 100
+
+        if diff_count < 50 or diff_percentage < 0.01:
+            logging.info("Images are nearly identical")
+            return None, 0, [], {}
+
+        # Convert diff image to numpy for region analysis
+        diff_array = np.array(diff_img)
+
+        # Create binary mask of differences (red pixels in diff)
+        # Pixelmatch outputs red for differences
+        red_channel = diff_array[:, :, 0]
+        green_channel = diff_array[:, :, 1]
+        diff_mask = ((red_channel > 200) & (green_channel < 100)).astype(np.uint8) * 255
+
+        # Group nearby differences into regions using morphological operations
+        kernel = np.ones((10, 10), np.uint8)
+        diff_mask = cv2.morphologyEx(diff_mask, cv2.MORPH_CLOSE, kernel)
+        diff_mask = cv2.dilate(diff_mask, kernel, iterations=2)
+
+        # Find contours (regions of difference)
+        contours, _ = cv2.findContours(diff_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        # Group and analyze regions
+        grouped_regions = []
+        all_y_positions = []
+
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area > 100:  # Minimum area
+                x, y, w, h = cv2.boundingRect(contour)
+
+                # Store region info
+                region = {
+                    'x': round(x / w1, 3),
+                    'y': round(y / h1, 3),
+                    'w': round(w / w1, 3),
+                    'h': round(h / h1, 3),
+                    'area': area,
+                    'pixel_x': x,
+                    'pixel_y': y,
+                    'pixel_w': w,
+                    'pixel_h': h
+                }
+                grouped_regions.append(region)
+                all_y_positions.append(y)
+
+        # Sort regions by y position (top to bottom)
+        grouped_regions.sort(key=lambda r: r['pixel_y'])
+
+        # Analyze for vertical shift pattern (cascade effect)
+        shift_analysis = analyze_shift_pattern(grouped_regions, h1)
+
+        # Create annotated diff image
+        cv_diff = cv2.cvtColor(np.array(diff_img.convert('RGB')), cv2.COLOR_RGB2BGR)
+
+        for i, region in enumerate(grouped_regions):
+            x, y = region['pixel_x'], region['pixel_y']
+            w, h = region['pixel_w'], region['pixel_h']
+
+            # Color based on whether it's part of a shift pattern
+            if shift_analysis.get('is_cascade'):
+                if i == 0:
+                    color = (0, 0, 255)  # Red for root cause
+                else:
+                    color = (0, 165, 255)  # Orange for cascade effect
+            else:
+                color = (0, 0, 255)  # Red
+
+            cv2.rectangle(cv_diff, (x, y), (x + w, y + h), color, 2)
+            cv2.putText(cv_diff, f"#{i+1}", (x, y - 5),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+        # Add summary info
+        cv2.putText(cv_diff, f"Diff: {diff_count}px ({diff_percentage:.2f}%)", (10, 25),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(cv_diff, f"Regions: {len(grouped_regions)}", (10, 50),
+                   cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+
+        if shift_analysis.get('is_cascade'):
+            cv2.putText(cv_diff, "DETECTED: Vertical shift cascade", (10, 75),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+        # Convert back to PIL and save
+        rgb_output = cv2.cvtColor(cv_diff, cv2.COLOR_BGR2RGB)
+        pil_output = Image.fromarray(rgb_output)
+
+        output_bytes = io.BytesIO()
+        pil_output.save(output_bytes, format='PNG')
+        output_bytes.seek(0)
+
+        return output_bytes, diff_count, grouped_regions, shift_analysis
+
+    except Exception as e:
+        logging.error(f"Error in pixelmatch diff: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, 0, [], {}
+
+
+def analyze_shift_pattern(regions: list, img_height: int) -> dict:
+    """
+    Analyze if differences form a vertical shift pattern (cascade effect).
+
+    When one element has spacing issue, everything below shifts.
+    This detects that pattern to report only the ROOT CAUSE.
+
+    Returns:
+        dict with:
+        - is_cascade: True if vertical cascade detected
+        - root_region_idx: Index of the likely root cause region
+        - shift_direction: 'down' or 'up'
+        - estimated_shift_px: Estimated pixel shift amount
+    """
+    if len(regions) < 2:
+        return {'is_cascade': False}
+
+    # Check if regions are stacked vertically
+    y_positions = [r['pixel_y'] for r in regions]
+    x_positions = [r['pixel_x'] for r in regions]
+
+    # Calculate vertical spread vs horizontal spread
+    y_spread = max(y_positions) - min(y_positions) if y_positions else 0
+    x_spread = max(x_positions) - min(x_positions) if x_positions else 0
+
+    # If regions span more than 30% of image height and are vertically aligned
+    if y_spread > img_height * 0.3:
+        # Check if x positions are similar (vertically aligned)
+        x_variance = np.std(x_positions) if len(x_positions) > 1 else 0
+
+        # If x positions are similar (low variance), it's likely a vertical shift
+        if x_variance < 50:  # Threshold for "same column"
+            # The topmost region is likely the root cause
+            return {
+                'is_cascade': True,
+                'root_region_idx': 0,  # First region (topmost) is root cause
+                'shift_direction': 'down',
+                'estimated_shift_px': y_spread // len(regions),
+                'affected_regions': len(regions) - 1
+            }
+
+    # Check for horizontal shift pattern
+    if x_spread > 100 and y_spread < img_height * 0.2:
+        return {
+            'is_cascade': True,
+            'root_region_idx': 0,
+            'shift_direction': 'horizontal',
+            'estimated_shift_px': x_spread // len(regions),
+            'affected_regions': len(regions) - 1
+        }
+
+    return {'is_cascade': False}
+
+
+def merge_overlapping_regions(regions: list, overlap_threshold: float = 0.3) -> list:
+    """
+    Merge regions that overlap significantly to avoid duplicate reports.
+
+    Args:
+        regions: List of region dicts with x, y, w, h (normalized 0-1)
+        overlap_threshold: Minimum overlap ratio to merge (0-1)
+
+    Returns:
+        List of merged regions
+    """
+    if len(regions) <= 1:
+        return regions
+
+    merged = []
+    used = set()
+
+    for i, r1 in enumerate(regions):
+        if i in used:
+            continue
+
+        # Start with this region
+        merged_region = r1.copy()
+        used.add(i)
+
+        # Find overlapping regions
+        for j, r2 in enumerate(regions):
+            if j in used or j == i:
+                continue
+
+            # Calculate overlap
+            x1_min, x1_max = r1['x'], r1['x'] + r1['w']
+            y1_min, y1_max = r1['y'], r1['y'] + r1['h']
+            x2_min, x2_max = r2['x'], r2['x'] + r2['w']
+            y2_min, y2_max = r2['y'], r2['y'] + r2['h']
+
+            # Intersection
+            x_overlap = max(0, min(x1_max, x2_max) - max(x1_min, x2_min))
+            y_overlap = max(0, min(y1_max, y2_max) - max(y1_min, y2_min))
+
+            intersection = x_overlap * y_overlap
+            area1 = r1['w'] * r1['h']
+            area2 = r2['w'] * r2['h']
+
+            # Check if overlap is significant
+            overlap_ratio = intersection / min(area1, area2) if min(area1, area2) > 0 else 0
+
+            if overlap_ratio > overlap_threshold:
+                # Merge regions - expand to cover both
+                new_x = min(r1['x'], r2['x'])
+                new_y = min(r1['y'], r2['y'])
+                new_x2 = max(x1_max, x2_max)
+                new_y2 = max(y1_max, y2_max)
+
+                merged_region = {
+                    'x': new_x,
+                    'y': new_y,
+                    'w': new_x2 - new_x,
+                    'h': new_y2 - new_y
+                }
+                used.add(j)
+
+        merged.append(merged_region)
+
+    return merged

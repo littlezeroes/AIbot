@@ -15,6 +15,7 @@ Pillow~=11.0.0
 opencv-python~=4.9.0
 numpy~=1.26.0
 scikit-image~=0.22.0
+pixelmatch~=0.3.0
 uvicorn
 yfinance
 ta
