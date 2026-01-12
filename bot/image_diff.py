@@ -617,13 +617,13 @@ def create_ssim_diff(image1_bytes: io.BytesIO, image2_bytes: io.BytesIO) -> tupl
         diff_map = (1 - ssim_image) * 255
         diff_map = diff_map.astype(np.uint8)
 
-        # Threshold to find significant structural differences
-        _, thresh = cv2.threshold(diff_map, 50, 255, cv2.THRESH_BINARY)
+        # Threshold to find structural differences - LOWER = more sensitive
+        _, thresh = cv2.threshold(diff_map, 15, 255, cv2.THRESH_BINARY)
 
-        # Clean up noise
-        kernel = np.ones((5, 5), np.uint8)
+        # Clean up noise with smaller kernel to preserve detail
+        kernel = np.ones((3, 3), np.uint8)
         thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
-        thresh = cv2.dilate(thresh, kernel, iterations=2)
+        thresh = cv2.dilate(thresh, kernel, iterations=1)
 
         # Find contours of different regions
         contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -639,7 +639,7 @@ def create_ssim_diff(image1_bytes: io.BytesIO, image2_bytes: io.BytesIO) -> tupl
         diff_regions = []
         for contour in contours:
             area = cv2.contourArea(contour)
-            if area > 100:  # Minimum area threshold
+            if area > 20:  # Lower minimum to catch small differences
                 x, y, w, h = cv2.boundingRect(contour)
 
                 # Add padding

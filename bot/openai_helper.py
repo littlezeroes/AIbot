@@ -114,48 +114,64 @@ CUỐI CÙNG thêm 1 câu bựa random kiểu:
 """
 
         # Special prompt for ROOT CAUSE analysis (used with pixelmatch diff)
-        self.qc_json_prompt = """Bạn là Senior QC chuyên soi UI pixel-perfect. So sánh 2 hình: DEV (hình 1) vs DESIGN (hình 2).
+        self.qc_json_prompt = """Bạn là Senior QC KHẮT KHE nhất, chuyên soi UI pixel-perfect. So sánh 2 hình: DEV (hình 1) vs DESIGN (hình 2).
 
-🔍 SOI KỸ TỪNG CHI TIẾT:
+⚠️ QUAN TRỌNG: KHÔNG ĐƯỢC BỎ SÓT BẤT KỲ LỖI NÀO! Soi kỹ từng pixel!
 
-1️⃣ SPACING - Khoảng cách:
-- Padding trên/dưới/trái/phải có đúng không?
-- Margin giữa các element có khớp không?
-- Gap trong flex/grid có đúng không?
-- Lệch 1 PIXEL cũng phải báo!
+🔍 CHECKLIST BẮT BUỘC KIỂM TRA:
 
-2️⃣ ALIGNMENT - Căn chỉnh:
-- Text có thẳng hàng không?
+1️⃣ SPACING - Khoảng cách (SOI KỸ!):
+- Padding trên/dưới/trái/phải của MỖI element
+- Margin giữa các element
+- Gap trong flex/grid
+- Khoảng cách giữa text và icon
+- Khoảng cách giữa các dòng text
+→ LỆCH 1 PIXEL = BÁO LỖI!
+
+2️⃣ ALIGNMENT - Căn chỉnh (SOI KỸ!):
+- Text có thẳng hàng với nhau không?
 - Icon có căn giữa đúng không?
-- Element có align đúng với nhau không?
-- Kiểm tra cả vertical và horizontal alignment
+- Element có align đúng theo design không?
+- Vertical alignment của mỗi element
+- Horizontal alignment của mỗi element
+→ LỆCH 1 PIXEL = BÁO LỖI!
 
 3️⃣ COLOR - Màu sắc:
-- Background color có đúng không?
-- Text color có khớp không?
-- Border color có đúng không?
-- Opacity có đúng không?
+- Background color chính xác?
+- Text color chính xác?
+- Border color chính xác?
+- Shadow color chính xác?
+- Opacity chính xác?
 
 4️⃣ TYPOGRAPHY:
-- Font size có đúng không?
-- Font weight có khớp không?
-- Line height có đúng không?
+- Font size đúng chưa?
+- Font weight đúng chưa?
+- Line height đúng chưa?
+- Letter spacing đúng chưa?
 
 5️⃣ SIZE - Kích thước:
-- Width/height element có đúng không?
-- Border radius có khớp không?
+- Width của element
+- Height của element
+- Border radius
+- Border width
 
-📌 QUY TẮC:
-- Lệch 1 PIXEL cũng phải báo!
-- Nếu 1 lỗi gốc gây nhiều vùng lệch → chỉ báo lỗi GỐC
-- Mô tả cụ thể vị trí và cách fix
+6️⃣ MISSING/EXTRA:
+- Có element nào THIẾU không?
+- Có element nào THỪA không?
+- Có text nào khác không?
 
-TRẢ VỀ JSON:
+📌 QUY TẮC NGHIÊM NGẶT:
+- LỆCH 1 PIXEL CŨNG PHẢI BÁO!
+- KHÔNG ĐƯỢC nói "gần đúng" hay "chấp nhận được"
+- PHẢI báo TẤT CẢ lỗi tìm được
+- Nếu 1 lỗi gốc gây nhiều vùng lệch → báo lỗi GỐC + note ảnh hưởng
+
+TRẢ VỀ JSON (KHÔNG được trả [] nếu có bất kỳ khác biệt nào):
 ```json
 [
   {
-    "bug": "Mô tả lỗi cụ thể và cách fix",
-    "type": "SPACING|ALIGNMENT|COLOR|TYPOGRAPHY|SIZE",
+    "bug": "Mô tả lỗi CỤ THỂ: element gì, lệch bao nhiêu px, hướng nào",
+    "type": "SPACING|ALIGNMENT|COLOR|TYPOGRAPHY|SIZE|MISSING",
     "x": 0.0-1.0,
     "y": 0.0-1.0,
     "w": 0.0-1.0,
@@ -164,7 +180,7 @@ TRẢ VỀ JSON:
 ]
 ```
 
-CHỈ TRẢ JSON. Không có lỗi → []
+CHỈ TRẢ JSON. KHÔNG có lỗi → [] (nhưng phải CHẮC CHẮN 100% giống nhau)
 """
 
     def get_conversation_stats(self, chat_id: int) -> tuple[int, int]:
