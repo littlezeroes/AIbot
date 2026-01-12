@@ -20,18 +20,19 @@ def main():
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     # Check if the required environment variables are set
-    required_values = ['TELEGRAM_BOT_TOKEN', 'OPENAI_API_KEY']
+    required_values = ['TELEGRAM_BOT_TOKEN', 'ANTHROPIC_API_KEY']
     missing_values = [value for value in required_values if os.environ.get(value) is None]
     if len(missing_values) > 0:
         logging.error(f'The following environment values are missing in your .env: {", ".join(missing_values)}')
         exit(1)
 
     # Setup configurations
-    model = os.environ.get('OPENAI_MODEL', 'gpt-4o')
+    model = os.environ.get('CLAUDE_MODEL', 'claude-3-5-sonnet-20241022')
     functions_available = are_functions_available(model=model)
     max_tokens_default = default_max_tokens(model=model)
     openai_config = {
-        'api_key': os.environ['OPENAI_API_KEY'],
+        'anthropic_api_key': os.environ['ANTHROPIC_API_KEY'],
+        'openai_api_key': os.environ.get('OPENAI_API_KEY'),  # Optional, for DALL-E/TTS/Whisper
         'show_usage': os.environ.get('SHOW_USAGE', 'false').lower() == 'true',
         'stream': os.environ.get('STREAM', 'true').lower() == 'true',
         'proxy': os.environ.get('PROXY', None) or os.environ.get('OPENAI_PROXY', None),
@@ -53,7 +54,7 @@ def main():
         'bot_language': os.environ.get('BOT_LANGUAGE', 'en'),
         'show_plugins_used': os.environ.get('SHOW_PLUGINS_USED', 'false').lower() == 'true',
         'whisper_prompt': os.environ.get('WHISPER_PROMPT', ''),
-        'vision_model': os.environ.get('VISION_MODEL', 'gpt-4o'),
+        'vision_model': os.environ.get('VISION_MODEL', 'claude-3-5-sonnet-20241022'),
         'enable_vision_follow_up_questions': os.environ.get('ENABLE_VISION_FOLLOW_UP_QUESTIONS', 'true').lower() == 'true',
         'vision_prompt': os.environ.get('VISION_PROMPT', 'What is in this image'),
         'vision_detail': os.environ.get('VISION_DETAIL', 'auto'),

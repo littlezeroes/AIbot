@@ -5,23 +5,25 @@ import json
 import logging
 import os
 import base64
-import asyncio  # ✅ THÊM DÒNG NÀY
+import asyncio
 from goose3 import Goose
 
+import anthropic
 import telegram
 from telegram import Message, MessageEntity, Update, ChatMember, constants
 from telegram.ext import CallbackContext, ContextTypes
 
 from usage_tracker import UsageTracker
-from openai import AsyncOpenAI
-from playwright.async_api import async_playwright  # ✅ Thêm cho Playwright support
+from playwright.async_api import async_playwright
 from bs4 import BeautifulSoup
 
-def get_openai_client():
-    api_key = os.getenv("OPENAI_API_KEY")
+
+def get_claude_client():
+    api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
-        raise RuntimeError("❌ Thiếu biến môi trường OPENAI_API_KEY.")
-    return AsyncOpenAI(api_key=api_key)
+        raise RuntimeError("❌ Thiếu biến môi trường ANTHROPIC_API_KEY.")
+    return anthropic.AsyncAnthropic(api_key=api_key)
+
 
 def extract_text_from_url(url: str) -> str:
     try:
@@ -31,7 +33,7 @@ def extract_text_from_url(url: str) -> str:
     except Exception as e:
         return f"❌ Lỗi khi trích xuất nội dung: {e}"
 
-# ✅ Hàm fallback dùng Playwright nếu Goose fail
+
 async def fetch_page_with_playwright(url: str) -> str:
     try:
         async with async_playwright() as p:
@@ -55,118 +57,12 @@ async def fetch_page_with_playwright(url: str) -> str:
     except Exception as e:
         return f"❌ Lỗi Playwright: {e}"
 
+
 def extract_text_from_html(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
-
-    # Loại bỏ script, style
     for tag in soup(["script", "style"]):
         tag.decompose()
-
-    return soup.get_text(separator="\n")  # Trả về văn bản sạch, có xuống dòng
-
-async def summarize_url(url: str, update: Update = None, context: CallbackContext = None) -> str:
-    """
-    Tóm tắt nội dung của một URL nếu bot được mention hoặc được reply trong nhóm.
-    """
-    if update and context:
-        if update.effective_chat.type in [constants.ChatType.GROUP, constants.ChatType.SUPERGROUP]:
-            bot_username = context.bot.username.lower()
-            message_text_lower = (update.message.text or "").lower()
-            is_mentioned = f"@{bot_username}" in message_text_lower
-            is_reply_to_bot = (
-                update.message.reply_to_message
-                and update.message.reply_to_message.from_user.id == context.bot.id
-            )
-            if not is_mentioned and not is_reply_to_bot:
-                return None
-
-    content = extract_text_from_url(url)
-    if not content or len(content.strip()) < 100:
-        content = await fetch_page_with_playwright(url)  # fallback nếu Goose fail
-        if not content or len(content.strip()) < 100:
-            return "E chưa tóm tắt được nội dung. Cho e xin link rõ ràng hơn ạ."
-    
-        # Giới hạn nội dung ~6000 ký tự để tránh vượt context limit
-        trimmed_content = content[:6000]
-    
-        prompt = (
-            "Em là 1 biên tập viên tin tức ngọt ngào. "
-            "Nhiệm vụ là **tóm tắt nội dung sau như đang kể lại cho bạn thân nghe**. "
-            "Hãy trình bày theo đúng format dưới đây:\n\n"
-            "• Mỗi ý bắt đầu bằng: ❖ \n"
-            "• Kết thúc mỗi ý bằng: <br/>\n"
-            "• Cuối cùng chốt bằng 1 câu thân mật như: Em gửi nha sếp 😌 hoặc Vậy nha anh yêu 🫶\n\n"
-            "Ví dụ:\n"
-            "❖ Dự án này thuộc tuyến cao tốc Bắc Nam.<br/>\n"
-            "❖ Chiều dài 30 km, đi qua Hà Tĩnh.<br/>\n"
-            "❖ Tổng đầu tư 7.664 tỷ đồng.<br/>\n"
-            "❖ Đang triển khai thi công, dự kiến hoàn thành cuối năm 2025.<br/>\n"
-            "Vậy nha anh yêu 🫶\n\n"
-            f"Dưới đây là nội dung cần tóm tắt:\n\n"
-
-        f"{trimmed_content}"
-
-            )
-    try:
-        client = get_openai_client()
-        response = await client.chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.8,
-            max_tokens=500,
-        )
-        message = response.choices[0].message
-        if message and message.content:
-            return message.content.strip()
-        return "❌ Không lấy được nội dung từ OpenAI."
-    except Exception as e:
-        return f"❌ Lỗi khi gọi OpenAI: {e}"
-
-
-# (The rest of the file remains unchanged.)
-
-
-
-# (The rest of the file remains unchanged.)
-
-
-# (The rest of the file remains unchanged.)
-
-
-# (The rest of the file remains un
-
-
-# (The rest of the file remains unchanged.)from __future__ import annotations
-
-import itertools
-import json
-import logging
-import os
-import base64
-from goose3 import Goose
-
-import telegram
-from telegram import Message, MessageEntity, Update, ChatMember, constants
-from telegram.ext import CallbackContext, ContextTypes
-
-from usage_tracker import UsageTracker
-from openai import AsyncOpenAI
-
-
-def get_openai_client():
-    api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
-        raise RuntimeError("❌ Thiếu biến môi trường OPENAI_API_KEY.")
-    return AsyncOpenAI(api_key=api_key)
-
-
-def extract_text_from_url(url: str) -> str:
-    try:
-        with Goose() as g:
-            article = g.extract(url=url)
-            return article.cleaned_text
-    except Exception as e:
-        return f"❌ Lỗi khi trích xuất nội dung: {e}"
+    return soup.get_text(separator="\n")
 
 
 async def summarize_url(url: str, update: Update = None, context: CallbackContext = None) -> str:
@@ -190,18 +86,14 @@ async def summarize_url(url: str, update: Update = None, context: CallbackContex
         html = await fetch_page_with_playwright(url)
         if not html or len(html.strip()) < 100:
             return "❌ Không lấy được nội dung từ trang. Gửi link rõ hơn giúp em!"
-
-        # 🧼 Parse HTML thành text sạch
         content = extract_text_from_html(html)
 
-    # 🧹 Loại bỏ dòng đầu nếu là "Đây là mã HTML..."
     lines = content.strip().split("\n")
     if lines and lines[0].lower().startswith("đây là mã html"):
         content = "\n".join(lines[1:])
 
-        # Giới hạn nội dung ~6000 ký tự để tránh vượt context limit
     trimmed_content = content[:6000]
-    
+
     prompt = (
         "Tóm tắt nội dung sau bằng tiếng Việt. Trình bày ngắn gọn, mỗi ý trên một dòng rõ ràng."
         " Tránh viết đoạn văn dài.\n\n"
@@ -209,22 +101,18 @@ async def summarize_url(url: str, update: Update = None, context: CallbackContex
     )
 
     try:
-        client = get_openai_client()
-        response = await client.chat.completions.create(
-            model="gpt-4",
+        client = get_claude_client()
+        response = await client.messages.create(
+            model="claude-3-5-sonnet-20241022",
+            max_tokens=500,
             messages=[{"role": "user", "content": prompt}],
             temperature=0.5,
-            max_tokens=500,
         )
-        message = response.choices[0].message
-        if message and message.content:
-            return message.content.strip()
-        return "❌ Không lấy được nội dung từ OpenAI."
+        if response.content and len(response.content) > 0:
+            return response.content[0].text.strip()
+        return "❌ Không lấy được nội dung từ Claude."
     except Exception as e:
-        return f"❌ Lỗi khi gọi OpenAI: {e}"
-
-
-# (The rest of the file remains unchanged.)
+        return f"❌ Lỗi khi gọi Claude: {e}"
 
 
 def message_text(message: Message) -> str:
@@ -272,7 +160,6 @@ def get_stream_cutoff_values(update: Update, content: str) -> int:
     Gets the stream cutoff values for the message length
     """
     if is_group_chat(update):
-        # group chats have stricter flood limits
         return 180 if len(content) > 1000 else 120 if len(content) > 200 \
             else 90 if len(content) > 50 else 50
     return 90 if len(content) > 1000 else 45 if len(content) > 200 \
@@ -319,13 +206,6 @@ async def edit_message_with_retry(context: ContextTypes.DEFAULT_TYPE, chat_id: i
                                   message_id: str, text: str, markdown: bool = True, is_inline: bool = False):
     """
     Edit a message with retry logic in case of failure (e.g. broken markdown)
-    :param context: The context to use
-    :param chat_id: The chat id to edit the message in
-    :param message_id: The message id to edit
-    :param text: The text to edit the message with
-    :param markdown: Whether to use markdown parse mode
-    :param is_inline: Whether the message to edit is an inline message
-    :return: None
     """
     try:
         await context.bot.edit_message_text(
@@ -373,10 +253,8 @@ async def is_allowed(config, update: Update, context: CallbackContext, is_inline
         return True
     name = update.inline_query.from_user.name if is_inline else update.message.from_user.name
     allowed_user_ids = config['allowed_user_ids'].split(',')
-    # Check if user is allowed
     if str(user_id) in allowed_user_ids:
         return True
-    # Check if it's a group a chat with at least one authorized member
     if not is_inline and is_group_chat(update):
         admin_user_ids = config['admin_user_ids'].split(',')
         for user in itertools.chain(allowed_user_ids, admin_user_ids):
@@ -393,7 +271,6 @@ async def is_allowed(config, update: Update, context: CallbackContext, is_inline
 def is_admin(config, user_id: int, log_no_admin=False) -> bool:
     """
     Checks if the user is the admin of the bot.
-    The first user in the user list is the admin.
     """
     if config['admin_user_ids'] == '-':
         if log_no_admin:
@@ -401,29 +278,20 @@ def is_admin(config, user_id: int, log_no_admin=False) -> bool:
         return False
 
     admin_user_ids = config['admin_user_ids'].split(',')
-
-    # Check if user is in the admin user list
     if str(user_id) in admin_user_ids:
         return True
-
     return False
 
 
 def get_user_budget(config, user_id) -> float | None:
     """
     Get the user's budget based on their user ID and the bot configuration.
-    :param config: The bot configuration object
-    :param user_id: User id
-    :return: The user's budget as a float, or None if the user is not found in the allowed user list
     """
-
-    # no budget restrictions for admins and '*'-budget lists
     if is_admin(config, user_id) or config['user_budgets'] == '*':
         return float('inf')
 
     user_budgets = config['user_budgets'].split(',')
     if config['allowed_user_ids'] == '*':
-        # same budget for all users, use value in first position of budget list
         if len(user_budgets) > 1:
             logging.warning('multiple values for budgets set with unrestricted user list '
                             'only the first value is used as budget for everyone.')
@@ -442,13 +310,7 @@ def get_user_budget(config, user_id) -> float | None:
 def get_remaining_budget(config, usage, update: Update, is_inline=False) -> float:
     """
     Calculate the remaining budget for a user based on their current usage.
-    :param config: The bot configuration object
-    :param usage: The usage tracker object
-    :param update: Telegram update object
-    :param is_inline: Boolean flag for inline queries
-    :return: The remaining budget for the user as a float
     """
-    # Mapping of budget period to cost period
     budget_cost_map = {
         "monthly": "cost_month",
         "daily": "cost_today",
@@ -460,14 +322,12 @@ def get_remaining_budget(config, usage, update: Update, is_inline=False) -> floa
     if user_id not in usage:
         usage[user_id] = UsageTracker(user_id, name)
 
-    # Get budget for users
     user_budget = get_user_budget(config, user_id)
     budget_period = config['budget_period']
     if user_budget is not None:
         cost = usage[user_id].get_current_cost()[budget_cost_map[budget_period]]
         return user_budget - cost
 
-    # Get budget for guests
     if 'guests' not in usage:
         usage['guests'] = UsageTracker('guests', 'all guest users in group chats')
     cost = usage['guests'].get_current_cost()[budget_cost_map[budget_period]]
@@ -477,12 +337,6 @@ def get_remaining_budget(config, usage, update: Update, is_inline=False) -> floa
 def is_within_budget(config, usage, update: Update, is_inline=False) -> bool:
     """
     Checks if the user reached their usage limit.
-    Initializes UsageTracker for user and guest when needed.
-    :param config: The bot configuration object
-    :param usage: The usage tracker object
-    :param update: Telegram update object
-    :param is_inline: Boolean flag for inline queries
-    :return: Boolean indicating if the user has a positive budget
     """
     user_id = update.inline_query.from_user.id if is_inline else update.message.from_user.id
     name = update.inline_query.from_user.name if is_inline else update.message.from_user.name
@@ -495,18 +349,12 @@ def is_within_budget(config, usage, update: Update, is_inline=False) -> bool:
 def add_chat_request_to_usage_tracker(usage, config, user_id, used_tokens):
     """
     Add chat request to usage tracker
-    :param usage: The usage tracker object
-    :param config: The bot configuration object
-    :param user_id: The user id
-    :param used_tokens: The number of tokens used
     """
     try:
         if int(used_tokens) == 0:
             logging.warning('No tokens used. Not adding chat request to usage tracker.')
             return
-        # add chat request to users usage tracker
         usage[user_id].add_chat_tokens(used_tokens, config['token_price'])
-        # add guest chat request to guest usage tracker
         allowed_user_ids = config['allowed_user_ids'].split(',')
         if str(user_id) not in allowed_user_ids and 'guests' in usage:
             usage["guests"].add_chat_tokens(used_tokens, config['token_price'])
@@ -518,9 +366,6 @@ def add_chat_request_to_usage_tracker(usage, config, user_id, used_tokens):
 def get_reply_to_message_id(config, update: Update):
     """
     Returns the message id of the message to reply to
-    :param config: Bot configuration object
-    :param update: Telegram update object
-    :return: Message id of the message to reply to, or None if quoting is disabled
     """
     if config['enable_quoting'] or is_group_chat(update):
         return update.message.message_id
@@ -530,8 +375,6 @@ def get_reply_to_message_id(config, update: Update):
 def is_direct_result(response: any) -> bool:
     """
     Checks if the dict contains a direct result that can be sent directly to the user
-    :param response: The response value
-    :return: Boolean indicating if the result is a direct result
     """
     if type(response) is not dict:
         try:
@@ -593,7 +436,6 @@ def cleanup_intermediate_files(response: any):
             os.remove(value)
 
 
-# Function to encode the image
 def encode_image(fileobj):
     image = base64.b64encode(fileobj.getvalue()).decode('utf-8')
     return f'data:image/jpeg;base64,{image}'

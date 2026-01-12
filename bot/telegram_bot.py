@@ -7,17 +7,17 @@ import io
 import requests
 import yfinance as yf
 import ta
-from openai import AsyncOpenAI
+import anthropic
 import os
 from weather import get_weather, get_forecast
 
-openai_client = None
+claude_client = None
 
-def get_openai_client():
-    global openai_client
-    if openai_client is None:
-        openai_client = AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    return openai_client
+def get_claude_client():
+    global claude_client
+    if claude_client is None:
+        claude_client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    return claude_client
 
 from utils import summarize_url, fetch_page_with_playwright  # ✅ thêm hàm mới
 from uuid import uuid4
@@ -50,7 +50,7 @@ from utils import summarize_url, fetch_page_with_playwright  # ✅ thêm hàm m�
 
 async def extract_city_from_text(text: str) -> str:
     """
-    ✅ Dùng GPT để phân tích text và trích xuất city.
+    Dùng Claude để phân tích text và trích xuất city.
     Nếu không có city rõ ràng → trả về chuỗi rỗng "".
     """
     prompt = (
@@ -60,13 +60,13 @@ async def extract_city_from_text(text: str) -> str:
         "Nếu không rõ hoặc không có địa danh, chỉ trả về \"\" (chuỗi rỗng)."
     )
     try:
-        response = await get_openai_client().chat.completions.create(
-            model="gpt-4",
-            messages=[{"role": "user", "content": prompt}],
+        response = await get_claude_client().messages.create(
+            model="claude-3-5-haiku-20241022",
             max_tokens=10,
+            messages=[{"role": "user", "content": prompt}],
             temperature=0.0,
         )
-        city = response.choices[0].message.content.strip()
+        city = response.content[0].text.strip()
         return city
     except Exception:
         return ""
